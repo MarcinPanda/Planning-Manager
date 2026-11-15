@@ -122,6 +122,8 @@ def init_db():
         cursor.execute("ALTER TABLE employees ADD COLUMN lock_owner TEXT DEFAULT ''")
     if "lock_timestamp" not in columns_db:
         cursor.execute("ALTER TABLE employees ADD COLUMN lock_timestamp TEXT DEFAULT ''")
+    if "custom_breaks" not in columns_db:
+        cursor.execute("ALTER TABLE employees ADD COLUMN custom_breaks TEXT DEFAULT ''")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS departments (
@@ -140,6 +142,25 @@ def init_db():
     conn.close()
 
 
+def serialize_breaks(breaks):
+    """[(480, 495), ...] -> '08:00-08:15;...' (do zapisu w bazie)."""
+    return ";".join(
+        f"{s // 60:02d}:{s % 60:02d}-{e // 60:02d}:{e % 60:02d}" for s, e in (breaks or [])
+    )
+
+
+def parse_breaks(text):
+    """'08:00-08:15;...' -> [(480, 495), ...]; błędne wpisy są pomijane."""
+    result = []
+    for part in (text or "").split(";"):
+        if "-" not in part:
+            continue
+        start, end = part.split("-", 1)
+        if Validator.validate_time_format(start.strip()) and Validator.validate_time_format(end.strip()):
+            result.append((to_minutes(start.strip()), to_minutes(end.strip())))
+    return result
+
+
 def load_employees_from_db():
     result = []
 
@@ -147,13 +168,14 @@ def load_employees_from_db():
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, lastname, firstname, current_department, work_hours, shift, computed_hours, marked, info
+        SELECT id, lastname, firstname, current_department, work_hours, shift, computed_hours, marked, info,
+               custom_breaks
         FROM employees
     """)
     rows = cursor.fetchall()
 
     for row in rows:
-        emp = Employee(*row)
+        emp = Employee(*row[:9], custom_breaks=parse_breaks(row[9]))
 
         cursor.execute("""
             SELECT department, time_assigned
@@ -178,9 +200,10 @@ def insert_employee_to_db(data):
 
     cursor.execute("""
         INSERT INTO employees (
-            lastname, firstname, current_department, work_hours, shift, computed_hours, marked, info
+            lastname, firstname, current_department, work_hours, shift, computed_hours, marked, info,
+            custom_breaks
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         data["lastname"],
         data["firstname"],
@@ -190,6 +213,7 @@ def insert_employee_to_db(data):
         data["computed_hours"],
         0,
         data.get("info", ""),
+        serialize_breaks(data.get("custom_breaks")),
     ))
 
     employee_id = cursor.lastrowid
@@ -241,6 +265,36 @@ def toggle_employee_marked_in_db(emp_id, marked):
     conn.close()
 
 
+def _validate_time_in_order(emp, time_chosen):
+    """Nowa godzina nie może być wcześniejsza niż poprzednia zmiana działu
+    (ani początek pracy) i nie może wypadać po końcu pracy."""
+    if not isinstance(emp.work_hours, str) or "-" not in emp.work_hours:
+        return
+
+    start_str, end_str = (p.strip() for p in emp.work_hours.split("-", 1))
+    if not (Validator.validate_time_format(start_str) and Validator.validate_time_format(end_str)):
+        return
+
+    start_min = to_minutes(start_str)
+    end_min = to_minutes(end_str)
+    if end_min < start_min:
+        return  # zmiana nocna: nie sprawdzamy
+
+    new_min = to_minutes(time_chosen)
+    previous = start_min
+    for _, t in emp.dept_times:
+        if t and Validator.validate_time_format(t):
+            previous = max(previous, to_minutes(t))
+
+    if new_min < previous:
+        raise ValueError(
+            f"Godzina {time_chosen} jest wcześniejsza niż poprzednia zmiana "
+            f"({previous // 60:02d}:{previous % 60:02d})."
+        )
+    if new_min > end_min:
+        raise ValueError(f"Godzina {time_chosen} jest po końcu pracy ({end_str}).")
+
+
 def add_departments_to_db(employee_ids, dept_chosen, time_chosen):
     if not Validator.validate_time_format(time_chosen):
         raise ValueError("Invalid time format.")
@@ -259,6 +313,8 @@ def add_departments_to_db(employee_ids, dept_chosen, time_chosen):
             distinct = {d for d, _ in emp.dept_times}
             if dept_chosen not in distinct and len(distinct) >= 5:
                 raise ValueError("Cannot have more than 5 different departments.")
+
+            _validate_time_in_order(emp, time_chosen)
 
             emp.dept_times.append((dept_chosen, time_chosen))
 
@@ -394,6 +450,17 @@ def mark_employee_late_in_db(emp_id, actual_start):
     conn.close()
 
 
+def mark_employees_late_in_db(items):
+    """items: lista (emp_id, actual_start). Jedno zadanie dla wszystkich; zwraca listę błędów."""
+    errors = []
+    for emp_id, actual_start in items:
+        try:
+            mark_employee_late_in_db(emp_id, actual_start)
+        except Exception as exc:
+            errors.append(f"ID {emp_id}: {exc}")
+    return errors
+
+
 def lock_employee(emp_id, session_id):
     conn = get_connection()
     cursor = conn.cursor()
@@ -426,7 +493,8 @@ def unlock_employee(emp_id, session_id):
 
 def load_employee_by_id(cursor, emp_id):
     cursor.execute("""
-        SELECT id, lastname, firstname, current_department, work_hours, shift, computed_hours, marked, info
+        SELECT id, lastname, firstname, current_department, work_hours, shift, computed_hours, marked, info,
+               custom_breaks
         FROM employees
         WHERE id = ?
     """, (emp_id,))
@@ -435,7 +503,7 @@ def load_employee_by_id(cursor, emp_id):
     if row is None:
         return None
 
-    emp = Employee(*row)
+    emp = Employee(*row[:9], custom_breaks=parse_breaks(row[9]))
 
     cursor.execute("""
         SELECT department, time_assigned
@@ -454,7 +522,7 @@ def load_employee_by_id(cursor, emp_id):
 
 def import_excel_to_db(filepaths):
     if not filepaths:
-        return 0
+        return 0, 0
 
     employees_list = []
 
@@ -547,36 +615,52 @@ def import_excel_to_db(filepaths):
     cursor = conn.cursor()
 
     count = 0
+    skipped = 0
 
-    for _, row_ in employees_df.iterrows():
-        lastname, firstname = move_lastname_prefix_to_firstname(row_["lastname"], row_["firstname"])
+    try:
+        # Pomijamy osoby już obecne w bazie (to samo imię, nazwisko, dział, godziny, zmiana).
+        cursor.execute("SELECT lastname, firstname, current_department, work_hours, shift FROM employees")
+        seen = {tuple(r) for r in cursor.fetchall()}
 
-        cursor.execute("""
-            INSERT INTO employees (lastname, firstname, current_department, work_hours, shift, computed_hours, marked)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            lastname,
-            firstname,
-            row_["current_department"],
-            row_["work_hours"],
-            row_["shift"],
-            row_["computed_hours"],
-            0
-        ))
+        for _, row_ in employees_df.iterrows():
+            lastname, firstname = move_lastname_prefix_to_firstname(row_["lastname"], row_["firstname"])
 
-        employee_id = cursor.lastrowid
+            key = (lastname, firstname, row_["current_department"], row_["work_hours"], row_["shift"])
+            if key in seen:
+                skipped += 1
+                continue
+            seen.add(key)
 
-        cursor.execute("""
-            INSERT INTO departments (employee_id, department, time_assigned)
-            VALUES (?, ?, ?)
-        """, (employee_id, row_["current_department"], ""))
+            cursor.execute("""
+                INSERT INTO employees (lastname, firstname, current_department, work_hours, shift, computed_hours, marked)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                lastname,
+                firstname,
+                row_["current_department"],
+                row_["work_hours"],
+                row_["shift"],
+                row_["computed_hours"],
+                0
+            ))
 
-        count += 1
+            employee_id = cursor.lastrowid
 
-    conn.commit()
-    conn.close()
+            cursor.execute("""
+                INSERT INTO departments (employee_id, department, time_assigned)
+                VALUES (?, ?, ?)
+            """, (employee_id, row_["current_department"], ""))
 
-    return count
+            count += 1
+
+        conn.commit()
+    except Exception:
+        conn.rollback()  # wszystko albo nic
+        raise
+    finally:
+        conn.close()
+
+    return count, skipped
 
 
 ###############################################################################
@@ -1314,6 +1398,7 @@ class AddEmployeeDialog(QDialog):
             "shift": shift,
             "computed_hours": computed_hours,
             "info": "",
+            "custom_breaks": custom_breaks if shift == "Custom" else [],
         }
 
         self.accept()
@@ -1879,27 +1964,28 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Info", "No employee selected.")
             return
 
-        first_error = None
+        items = []
 
         for emp in selected:
             dlg = MarkAsLateDialog(self, emp)
 
             if dlg.exec() and dlg.result_data:
                 data = dlg.result_data
+                items.append((data["employee_id"], data["actual_start"]))
 
-                try:
-                    self.run_db_task(
-                        lambda data=data: mark_employee_late_in_db(
-                            data["employee_id"],
-                            data["actual_start"],
-                        ),
-                        refresh_after=True,
-                    )
-                except Exception as exc:
-                    first_error = str(exc)
+        if not items:
+            return
 
-        if first_error:
-            QMessageBox.critical(self, "Error", first_error)
+        def done(errors):
+            if errors:
+                QMessageBox.warning(self, "Warning", "\n".join(errors))
+
+        # jedno zadanie w tle dla wszystkich osób, błędy wracają przez on_finished
+        self.run_db_task(
+            lambda: mark_employees_late_in_db(items),
+            on_finished=done,
+            refresh_after=True,
+        )
 
     def on_model_data_changed(self, top_left, bottom_right, roles):
         info_col = len(columns) - 1
@@ -1927,8 +2013,12 @@ class MainWindow(QMainWindow):
 
         filepaths = dlg.selectedFiles()
 
-        def done(count):
-            QMessageBox.information(self, "Success", f"Data imported successfully. Imported rows: {count}")
+        def done(result):
+            count, skipped = result
+            msg = f"Data imported successfully. Imported rows: {count}"
+            if skipped:
+                msg += f"\nSkipped duplicates (already in the database): {skipped}"
+            QMessageBox.information(self, "Success", msg)
 
         self.run_db_task(
             lambda: import_excel_to_db(filepaths),
