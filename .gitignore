@@ -1,0 +1,20 @@
+# Build
+dist/
+build/
+*.exe
+*.pkg
+*.pdb
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# IDE
+.idea/
+
+# Dane lokalne (nazwiska pracowników) – nigdy do repozytorium
+*.db
+*.db-journal
+*.xlsx
+sorting_state.txt
