@@ -72,15 +72,40 @@ ROW_COLOR_LATE = "#FFE2A8"
 
 # Monitoring: pozycje wewnątrz działu (klient / strefa). Dla godzin liczy się tylko dział.
 SUB_POSITIONS = {
-    "Reachtruck": ["Noord", "Zuid", "Replenish", "Na-Nomi", "Kantel/Consolidatie", "Extra", "Reflex"],
+    "Reachtruck": [
+        "Noord", "Replenish", "Na-Nomi", "Kantel/Consolidatie", "Extra",          # North
+        "Zuid", "Mars ITR", "Mars NL", "Pietercil", "Reflex", "Grenade", "Jordan",  # South
+    ],
     "Orderpicker": [
-        "Choco (12)", "Pladis (22)", "ITR (18 20)", "Riverside (21)", "Ferrero (27+28)", "Nutricia (10)",
-        "Petfood (13)", "Alpro (23)", "Essity (14)", "Pietercil (15)", "Tlant (25)", "Grenade",
+        "Choco (12)", "Pladis (22)", "Riverside (21)", "Ferrero (27+28)", "Nutricia (10)",  # North
+        "Petfood (13)", "Alpro (23)", "Essity (14)", "Pietercil (15)", "Tlant (25)",
+        "Mars ITR (18 20)", "Mars GAM", "Grenade", "Jordan", "Reflex",               # South
     ],
 }
 SUB_POSITION_TITLES = {
-    "Reachtruck": "Outbound Reach",
-    "Orderpicker": "Orderpick",
+    "Reachtruck": "Reach",
+    "Orderpicker": "Picking",
+}
+
+# Hale magazynu na tablicy Monitoring. Strefy / klienci z listy SOUTH są w hali South,
+# wszystkie inne strefy Reach i Picking w North. Pozostałe działy są wspólne dla obu hal.
+HALLS = ("North", "South")
+SOUTH_POSITIONS = {
+    "Reachtruck": {"Zuid", "Mars ITR", "Mars NL", "Pietercil", "Reflex", "Grenade", "Jordan"},
+    "Orderpicker": {"Mars ITR (18 20)", "Mars GAM", "Grenade", "Jordan", "Reflex"},
+}
+INBOUND_PREFIX = "Inbound"   # działy „Inbound 1..5" -> kolumna INBOUND
+
+
+def hall_of(department, position):
+    return "South" if position in SOUTH_POSITIONS.get(department, ()) else "North"
+
+
+# Stare nazwy stref zapisane w bazie -> nowe (zamieniane przy starcie)
+POSITION_RENAMES = {
+    "Kantel": "Kantel/Consolidatie",
+    "Consolidatie": "Kantel/Consolidatie",
+    "ITR (18 20)": "Mars ITR (18 20)",
 }
 
 # Działy z planu, które w aplikacji są strefą innego działu: nazwa (małe litery) -> (dział, strefa).
@@ -98,7 +123,7 @@ MONITORING_GRID_COLUMNS = 8
 # dopóki RIT nie ma „V" (zwiezione). Potem wracają jego poprzednie strefy.
 CONSOLIDATION_DEPARTMENT = "Reachtruck"
 CONSOLIDATION_ZONE = "Kantel/Consolidatie"
-CONSOLIDATION_OLD_ZONES = ("Kantel", "Consolidatie")  # dawne osobne strefy – zamieniane przy starcie
+CONSOLIDATION_OLD_ZONES = ("Kantel", "Consolidatie")  # dawne osobne strefy (patrz POSITION_RENAMES)
 CONSOLIDATION_WORK_DEPARTMENT = "Consolidatie/Kantelen"  # kto robi konsolidację – lista w „Who was busy"
 CONSOLIDATION_IMPORT_DAYS = 2   # import z Excela: wiersze od (dziś - N dni)
 CONSOLIDATION_ACTIVE_DAYS = 1   # otwarte RIT-y starsze niż (dziś - N dni) nie zmieniają już stref

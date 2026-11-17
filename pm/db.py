@@ -156,16 +156,14 @@ def init_db():
             (new_dept, old_name),
         )
 
-    # Starsze wersje miały w Reach dwie strefy „Kantel" i „Consolidatie" – teraz to jedna strefa.
+    # Stare nazwy stref -> nowe (np. „Kantel" + „Consolidatie" -> jedna strefa, „ITR" -> „Mars ITR")
     for table, key in (("employees", "id"), ("consolidation_prev", "employee_id")):
         column = "position" if table == "employees" else "positions"
-        rows = cursor.execute(
-            f"SELECT {key}, {column} FROM {table} WHERE {column} LIKE '%Kantel%' OR {column} LIKE '%Consolidatie%'"
-        ).fetchall()
+        rows = cursor.execute(f"SELECT {key}, {column} FROM {table} WHERE {column} != ''").fetchall()
         for row_id, value in rows:
-            merged = join_positions([
-                config.CONSOLIDATION_ZONE if p in config.CONSOLIDATION_OLD_ZONES else p for p in split_positions(value)
-            ])
+            if not value:
+                continue
+            merged = join_positions([config.POSITION_RENAMES.get(p, p) for p in split_positions(value)])
             if merged != value:
                 cursor.execute(f"UPDATE {table} SET {column} = ? WHERE {key} = ?", (merged, row_id))
 

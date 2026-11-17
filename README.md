@@ -75,12 +75,15 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
 Aplikacja to jeden program z trzema widokami (Planning, Monitoring, Consolidatie) na jednej bazie.
 Monitoring to „oczy steeringu": kto gdzie teraz jest i co robi.
 
-- Tablica wszystkich działów; pracownik to kostka z nazwiskiem, loginem i godziną zmiany.
-- Przeciągnięcie na inny dział zapisuje zmianę działu z aktualną godziną.
-- Piking i Reach Outbound mają pozycje (klienci, strefy). Dla godzin liczy się tylko dział.
-- Działy ze strefami (Reach, Orderpick) to tabele jak w Excelu: kliknięcie komórki
-  włącza / wyłącza strefę, jedna osoba może mieć kilka stref naraz. „Nanomi Reachtruck" z planu
-  to Reach ze strefą Na-Nomi.
+- U góry liczniki: na zmianie, Reach, Picking, Inbound, Other, Unassigned, Ziek, Naar Huis.
+- Hale **North** i **South** (nagłówek zwija halę): kolumny REACH i PICKING, w nich strefy / klienci.
+  Który klient / strefa jest w South – `SOUTH_POSITIONS` w `pm/config.py`; reszta to North.
+- **Both halls**: INBOUND (Inbound 1–5) i OTHER (pozostałe działy).
+- Panel po prawej: **Unassigned** (Reach bez strefy, Picking bez klienta), Ziek, Naar Huis.
+- Pracownik to karta „login – Nazwisko I." (kolor: chory / do domu / spóźniony).
+- Przeciągnięcie karty = zmiana działu lub strefy od teraz; **Ctrl + przeciągnięcie** = dołożenie
+  drugiej strefy; prawy klik = zdjęcie ze strefy; **Ctrl+Z** cofa. Dla godzin liczy się tylko dział.
+- „Nanomi Reachtruck" z planu to Reach ze strefą Na-Nomi.
 - „Import Logins" wczytuje spis loginów z Excela (plik Inlognamen z kodami N012P / R012R albo kolumny `Login:` i `Name:`); loginy są
   dopasowywane po nazwisku i zostają w bazie na kolejne dni.
 

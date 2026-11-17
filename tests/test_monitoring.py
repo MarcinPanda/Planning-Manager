@@ -92,23 +92,12 @@ def test_view_groups_employees_into_zones(app, temp_db):
     view = MonitoringView()
     view.set_employees(db.load_employees_from_db())
 
-    def zone_ids(dept):
-        lst = view.zones[dept].list
-        return [lst.item(i).data(Qt.UserRole) for i in range(lst.count())]
-
-    def table_ids(dept):
-        return [e.employee_id for e in view.tables[dept].employees]
-
-    assert table_ids("Orderpicker") == [a]
-    assert table_ids("Reachtruck") == [b]
-    assert zone_ids("Naar Huis") == [c]
-    assert view.other_zone.list.count() == 1
-
-    # zielona komórka w kolumnie Pladis
-    table = view.tables["Orderpicker"]
-    col = table.FIXED_COLS + table.positions.index("Pladis (22)")
-    assert table.item(0, col).text() == "✓"
-    assert table.item(0, col - 1).text() == ""
+    pladis = view.position_zones[("Orderpicker", "Pladis (22)")]
+    assert pladis.ids() == [a]
+    assert view.unassigned.ids() == [b]          # Reach bez strefy
+    assert view.zones["Naar Huis"].ids() == [c]
+    assert view.other_zone.ids() != [] and not view.other_zone.isHidden()
+    assert pladis.list.item(0).text() == "Kowalski A."   # karta: nazwisko + inicjał (bez loginu)
 
     # kto poszedł do domu, tego nie da się przeciągnąć
     home_item = view.zones["Naar Huis"].list.item(0)
@@ -119,23 +108,51 @@ def test_view_groups_employees_into_zones(app, temp_db):
     toggled = []
     view.toggle_position_requested.connect(lambda *args: toggled.append(args))
 
-    # upuszczenie na kafel działu
-    view.zones["Laden"].list.dropped.emit([a], "", False)
-    # upuszczenie na kolumnę strefy w tabeli = przeniesienie od razu do tej strefy
-    reach = view.tables["Reachtruck"]
-    reach.handle_drop([a], reach.FIXED_COLS + reach.positions.index("Zuid"))
-    # upuszczenie na nazwisko = do działu bez strefy
-    reach.handle_drop([a], 0)
+    # upuszczenie na dział
+    view.zones["Laden"].list.dropped.emit([a], "Pladis (22)", False)
+    # upuszczenie na strefę w hali South, z Ctrl = dołóż
+    view.position_zones[("Reachtruck", "Zuid")].list.dropped.emit([a], "", True)
     assert received == [
-        ([a], "Laden", "", "", False),
-        ([a], "Reachtruck", "Zuid", "", False),
-        ([a], "Reachtruck", "", "", False),
+        ([a], "Laden", "", "Pladis (22)", False),
+        ([a], "Reachtruck", "Zuid", "", True),
     ]
 
-    # kliknięcie komórki strefy
-    table._on_cell_clicked(0, col)
-    table._on_cell_clicked(0, 0)  # klik w nazwisko nic nie przełącza
+    # prawy klik -> zdjęcie ze strefy
+    pladis.list.remove_requested.emit([a])
     assert toggled == [(a, "Pladis (22)")]
+
+    # liczniki
+    assert view.kpi_labels["Picking"].text() == "Picking:  <b>1</b>"
+    assert view.kpi_labels["Unassigned"].text() == "Unassigned:  <b>1</b>"
+    assert view.kpi_labels["Naar Huis"].text() == "Naar Huis:  <b>1</b>"
+
+
+def test_halls(app, temp_db):
+    from pm.config import hall_of
+
+    assert hall_of("Reachtruck", "Noord") == "North"
+    assert hall_of("Reachtruck", "Mars ITR") == "South"
+    assert hall_of("Orderpicker", "Choco (12)") == "North"
+    assert hall_of("Orderpicker", "Jordan") == "South"
+
+    emp_id = make_employee(department="Reachtruck")
+    db.toggle_position_in_db(emp_id, "Noord")
+    db.toggle_position_in_db(emp_id, "Zuid")
+    view = MonitoringView()
+    view.set_employees(db.load_employees_from_db())
+    # osoba w dwóch halach naraz -> karta w obu
+    assert "NORTH" in view.halls["North"].header.text()
+    assert "1 people" in view.halls["North"].header.text()
+    assert "1 people" in view.halls["South"].header.text()
+    view.halls["South"].header.click()   # zwinięcie hali
+    assert view.halls["South"].body.isHidden()
+
+
+def test_old_itr_zone_renamed(temp_db):
+    emp_id = make_employee(department="Orderpicker")
+    db.toggle_position_in_db(emp_id, "ITR (18 20)")
+    db.init_db()
+    assert _one().positions == ["Mars ITR (18 20)"]
 
 
 def test_several_zones_at_once(app, temp_db):
@@ -151,8 +168,7 @@ def test_several_zones_at_once(app, temp_db):
 
     view = MonitoringView()
     view.set_employees(db.load_employees_from_db())
-    table = view.tables["Reachtruck"]
-    marked = [p for i, p in enumerate(table.positions) if table.item(0, table.FIXED_COLS + i).text() == "✓"]
+    marked = [pos for (dept, pos), zone in view.position_zones.items() if zone.ids()]
     assert marked == ["Noord", "Replenish"]
 
     db.toggle_position_in_db(emp_id, "Noord")
@@ -212,7 +228,7 @@ def test_logins_import_and_matching(app, temp_db):
 
     view = MonitoringView()
     view.set_employees(db.load_employees_from_db())
-    assert "[007]" in view.zones["Laden"].list.item(0).text()
+    assert view.zones["Laden"].list.item(0).text() == "007 – Dijk J."
 
 
 def test_main_window_with_monitoring(app, temp_db):
@@ -231,7 +247,7 @@ def test_main_window_with_monitoring(app, temp_db):
 
     window.show_view(1)
     assert window.stack.currentIndex() == 1
-    assert len(window.monitoring_view.tables["Orderpicker"].employees) == 1
+    assert len(window.monitoring_view.unassigned.ids()) == 1
     window.close()
 
 
@@ -260,8 +276,8 @@ def test_nanomi_is_reach_zone_and_buffer_is_plain(app, temp_db):
 
     view = MonitoringView()
     view.set_employees(db.load_employees_from_db())
-    assert "Buffer" in view.zones and "Buffer" not in view.tables
-    assert [e.lastname for e in view.tables["Reachtruck"].employees] == ["Kowalski"]
+    assert "Buffer" in view.zones
+    assert view.position_zones[("Reachtruck", "Na-Nomi")].ids() == [by_name["Kowalski"].employee_id]
 
     # baza z poprzedniej wersji: „Nanomi Reachtruck" jako osobny dział -> Reach + Na-Nomi
     conn = sqlite3.connect(config.DB_PATH)
