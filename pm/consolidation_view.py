@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .config import CONSOLIDATION_DEPARTMENT
+from .config import CONSOLIDATION_DEPARTMENT, CONSOLIDATION_WORK_DEPARTMENT
 from .db import consolidation_zones, employee_token
 from .excel_io import parse_reachers
 
@@ -39,7 +39,7 @@ COLUMNS = ["Time", "RIT", "Area", "Amount", "Kantel", "Consol.", "Reacher", "V",
            "Who was busy"]
 COL = {name: i for i, name in enumerate(COLUMNS)}
 EDITABLE_TEXT = {"Time": "time", "Area": "area", "Amount": "amount", "Kantel": "kantel", "Lane": "lane",
-                 "Comment": "comment", "Who was busy": "busy"}
+                 "Comment": "comment"}
 
 COLOR_DRIVEN = "#c8f0d4"     # V – zwiezione
 COLOR_DONE = "#d9d9d9"       # V + Done – wszystko zrobione
@@ -118,6 +118,76 @@ class ReacherDialog(QDialog):
             if login not in result:
                 result.append(login)
         return result
+
+
+def split_names(text):
+    return [n.strip() for n in (text or "").replace(";", ",").replace("/", ",").split(",") if n.strip()]
+
+
+class BusyPopup(QDialog):
+    """Rozwijana lista pod komórką „Who was busy": osoby z działu Consolidatie/Kantelen do zaznaczenia."""
+
+    def __init__(self, employees, current_text, parent=None):
+        super().__init__(parent, Qt.Popup)
+        self.setMinimumWidth(300)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+
+        title = QLabel(f"On {CONSOLIDATION_WORK_DEPARTMENT} now:")
+        title.setStyleSheet("font-weight: bold;")
+        layout.addWidget(title)
+
+        current = split_names(current_text)
+        people = sorted(
+            (e for e in employees
+             if e.active_department == CONSOLIDATION_WORK_DEPARTMENT and e.status not in ("sick", "home")),
+            key=lambda e: (e.firstname.lower(), e.lastname.lower()),
+        )
+        names = [f"{e.firstname} {e.lastname}".strip() for e in people]
+        self.list = QListWidget()
+        for name in names + [n for n in current if n not in names]:  # wpisani wcześniej, których dziś nie ma
+            item = QListWidgetItem(name)
+            # bez ItemIsUserCheckable: przełączamy sami w itemClicked (klik w kwadracik albo w nazwisko)
+            item.setFlags(Qt.ItemIsEnabled)
+            item.setCheckState(Qt.Checked if name in current else Qt.Unchecked)
+            self.list.addItem(item)
+        if not names:
+            hint = QLabel(f"Nobody is on {CONSOLIDATION_WORK_DEPARTMENT} right now.")
+            hint.setStyleSheet("color: #888;")
+            layout.addWidget(hint)
+        self.list.setMaximumHeight(max(60, min(320, self.list.count() * 32 + 12)))
+        self.list.itemClicked.connect(self.toggle)
+        layout.addWidget(self.list)
+
+        self.other_edit = QLineEdit()
+        self.other_edit.setPlaceholderText("Someone else (type a name)")
+        self.other_edit.returnPressed.connect(self.accept)
+        layout.addWidget(self.other_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        clear = buttons.addButton("Clear", QDialogButtonBox.ResetRole)
+        clear.clicked.connect(self._clear)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def toggle(item):
+        item.setCheckState(Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked)
+
+    def _clear(self):
+        for i in range(self.list.count()):
+            self.list.item(i).setCheckState(Qt.Unchecked)
+        self.other_edit.clear()
+        self.accept()
+
+    def text(self):
+        names = [self.list.item(i).text() for i in range(self.list.count())
+                 if self.list.item(i).checkState() == Qt.Checked]
+        for name in split_names(self.other_edit.text()):
+            if name not in names:
+                names.append(name)
+        return ", ".join(names)
 
 
 class AddRitDialog(QDialog):
@@ -224,7 +294,8 @@ class ConsolidationView(QWidget):
         hint = QLabel(
             "Click the Reacher cell = assign reacher(s): they get the Kantel/Consolidatie zone on Monitoring  ·  "
             "Tick V when the RIT is driven in = the reacher goes back to their previous zone  ·  "
-            "Done = consolidation finished  ·  Double-click Lane / Comment / Time / pallets to edit"
+            "Done = consolidation finished  ·  Click Who was busy = pick from people on Consolidatie/Kantelen  ·  "
+            "Double-click Lane / Comment / Time / pallets to edit"
         )
         hint.setStyleSheet("color: #888;")
         hint.setWordWrap(True)
@@ -342,6 +413,11 @@ class ConsolidationView(QWidget):
                 item.setFlags(flags)
                 if name in ("Amount", "Kantel", "Consol.", "Time"):
                     item.setTextAlignment(Qt.AlignCenter)
+                if name == "Who was busy":
+                    item.setToolTip(f"Click to pick who did it (people on {CONSOLIDATION_WORK_DEPARTMENT})")
+                    if not r["busy"]:
+                        item.setText("+ pick")
+                        item.setForeground(QBrush(QColor("#888")))
                 if name == "Reacher":
                     zones = ", ".join(consolidation_zones(r["amount"], r["kantel"]))
                     item.setToolTip(f"Click to assign reacher(s). Zone on Monitoring: {zones}")
@@ -349,7 +425,8 @@ class ConsolidationView(QWidget):
                         item.setForeground(QBrush(QColor("#888")))
                 if color:
                     item.setBackground(QBrush(QColor(color)))
-                    if not (name == "Reacher" and not r["reachers"]):
+                    placeholder = (name == "Reacher" and not r["reachers"]) or (name == "Who was busy" and not r["busy"])
+                    if not placeholder:
                         item.setForeground(QBrush(QColor("#000")))
                 self.table.setItem(row_index, COL[name], item)
         self._filling = False
@@ -361,6 +438,25 @@ class ConsolidationView(QWidget):
     def _on_cell_clicked(self, row, col):
         if col == COL["Reacher"]:
             self.edit_reachers(row)
+        elif col == COL["Who was busy"]:
+            self.edit_busy(row)
+
+    def edit_busy(self, row):
+        r = self.row_data(row)
+        if r is None:
+            return
+        popup = BusyPopup(self.employees, r["busy"], self)
+        rect = self.table.visualRect(self.table.model().index(row, COL["Who was busy"]))
+        popup.move(self.table.viewport().mapToGlobal(rect.bottomLeft()))
+        self.dialog_open = True
+        try:
+            accepted = popup.exec() == QDialog.Accepted
+        finally:
+            self.dialog_open = False
+        if accepted:
+            text = popup.text()
+            if text != r["busy"]:
+                self.update_requested.emit(r["id"], {"busy": text})
 
     def edit_reachers(self, row):
         r = self.row_data(row)

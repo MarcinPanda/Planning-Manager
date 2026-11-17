@@ -198,6 +198,20 @@ def test_old_kantel_and_consolidatie_zones_are_merged(temp_db):
     assert _emp(emp).positions == ["Noord", KC]
 
 
+def test_who_was_busy_picker(app, temp_db):
+    from pm.consolidation_view import BusyPopup
+
+    make_employee(lastname="Kant", firstname="Kim", department="Consolidatie/Kantelen")
+    make_employee(lastname="Reach", firstname="Ron", department="Reachtruck")
+    popup = BusyPopup(db.load_employees_from_db(), "Johan")
+    names = [popup.list.item(i).text() for i in range(popup.list.count())]
+    assert names == ["Kim Kant", "Johan"]          # tylko dział konsolidacji + wpisany wcześniej
+    assert popup.text() == "Johan"
+    popup.toggle(popup.list.item(0))
+    popup.other_edit.setText("Ewa")
+    assert popup.text() == "Kim Kant, Johan, Ewa"
+
+
 def test_done_rows_hidden_by_default(app, temp_db):
     open_rit = db.add_consolidation_in_db(TODAY, "1", amount=1)
     done_rit = db.add_consolidation_in_db(TODAY, "2", amount=1)

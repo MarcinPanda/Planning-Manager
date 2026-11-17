@@ -99,6 +99,7 @@ MONITORING_GRID_COLUMNS = 8
 CONSOLIDATION_DEPARTMENT = "Reachtruck"
 CONSOLIDATION_ZONE = "Kantel/Consolidatie"
 CONSOLIDATION_OLD_ZONES = ("Kantel", "Consolidatie")  # dawne osobne strefy – zamieniane przy starcie
+CONSOLIDATION_WORK_DEPARTMENT = "Consolidatie/Kantelen"  # kto robi konsolidację – lista w „Who was busy"
 CONSOLIDATION_IMPORT_DAYS = 2   # import z Excela: wiersze od (dziś - N dni)
 CONSOLIDATION_ACTIVE_DAYS = 1   # otwarte RIT-y starsze niż (dziś - N dni) nie zmieniają już stref
 

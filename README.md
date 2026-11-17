@@ -90,5 +90,6 @@ Monitoring to „oczy steeringu": kto gdzie teraz jest i co robi.
 - Pozycja **Consolidatie** w menu po lewej przełącza na listę RIT-ów; **Import Consolidatie** wczytuje plik `Consolidatie_2026.xlsx` (zakładka Consolidatie, wiersze z ostatnich 2 dni i kolejnych). Ponowny import dodaje nowe RIT-y i nie nadpisuje tego, co wpisano w aplikacji.
 - Kliknięcie w kolumnę **Reacher** = przypisanie reachera (lista osób z działu Reach albo login, np. `R052R`).
 - Przypisany reacher, dopóki RIT nie ma **V** (zwiezione), dostaje na Monitoringu strefę **Kantel/Consolidatie**. Po V wracają jego poprzednie strefy. Godziny nadal liczą się dla Reach.
+- Kliknięcie w **Who was busy** = rozwijana lista osób, które są teraz na dziale Consolidatie/Kantelen (można zaznaczyć kilka albo wpisać kogoś innego).
 - **Done** (X) = konsolidacja zrobiona (bez wpływu na strefy); takie RIT-y są domyślnie ukryte ("Hide done"). Lane, Comment, Time i liczby palet edytuje się dwuklikiem.
 - Plik Excel nie jest zmieniany przez aplikację.
