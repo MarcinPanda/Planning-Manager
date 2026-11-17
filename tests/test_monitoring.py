@@ -229,7 +229,7 @@ def test_main_window_with_monitoring(app, temp_db):
             break
         QApplicationSleep(app)
 
-    window.view_toggle.setChecked(True)
+    window.show_view(1)
     assert window.stack.currentIndex() == 1
     assert len(window.monitoring_view.tables["Orderpicker"].employees) == 1
     window.close()

@@ -85,3 +85,11 @@ Ta sama aplikacja i baza, dodatkowo przełącznik Planning / Monitoring.
   dopasowywane po nazwisku i zostają w bazie na kolejne dni.
 
 Budowanie: `.venv\Scripts\python -m PyInstaller Planning_Monitoring.spec --noconfirm --distpath dist --workpath build`
+
+### Widok Consolidatie (lista RIT-ów)
+
+- Przycisk **Consolidatie** u góry przełącza na listę RIT-ów; **Import Consolidatie** wczytuje plik `Consolidatie_2026.xlsx` (zakładka Consolidatie, wiersze z ostatnich 2 dni i kolejnych). Ponowny import dodaje nowe RIT-y i nie nadpisuje tego, co wpisano w aplikacji.
+- Kliknięcie w kolumnę **Reacher** = przypisanie reachera (lista osób z działu Reach albo login, np. `R052R`).
+- Przypisany reacher, dopóki RIT nie ma **V** (zwiezione), dostaje na Monitoringu strefę **Kantel** (gdy RIT ma palety do kantelowania) i/lub **Consolidatie** (pozostałe palety). Po V wracają jego poprzednie strefy. Godziny nadal liczą się dla Reach.
+- **Done** = konsolidacja zrobiona (bez wpływu na strefy). Lane, Comment, Time i liczby palet edytuje się dwuklikiem.
+- Plik Excel nie jest zmieniany przez aplikację.

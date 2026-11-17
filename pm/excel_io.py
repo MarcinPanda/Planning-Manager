@@ -250,3 +250,150 @@ def read_logins_excel(filepath):
                 return result
 
     raise ValueError("No login list found (expected a 'Naam' / 'Name' column with login codes or numbers).")
+
+
+def parse_reachers(value):
+    """'R003R/R091R', 'R052R / R105R', 'r118r' -> ['003', '091'] (loginy reacherów)."""
+    if value is None:
+        return []
+    result = []
+    for part in re.split(r"[/,;+&\s]+", str(value)):
+        login = normalize_login(part)
+        if login and login not in result:
+            result.append(login)
+    return result
+
+
+def _as_date(value):
+    from datetime import date, datetime
+
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d.%m.%Y", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(value.strip(), fmt).date()
+            except ValueError:
+                pass
+    return None
+
+
+def _as_time(value):
+    from datetime import datetime, time
+
+    if isinstance(value, datetime):
+        value = value.time()
+    if isinstance(value, time):
+        return f"{value.hour:02d}:{value.minute:02d}"
+    if isinstance(value, (int, float)) and 0 <= value < 1:  # ułamek doby z Excela
+        minutes = round(value * 24 * 60)
+        return f"{minutes // 60:02d}:{minutes % 60:02d}"
+    if isinstance(value, str):
+        return normalize_hours(value.strip()) if ":" in value else value.strip()
+    return ""
+
+
+def _as_int(value):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _flag(value):
+    """'v' / 'V' / 'x' / 'X' / ' v' -> True."""
+    return isinstance(value, str) and value.strip() != "" or value is True
+
+
+def read_consolidation_excel(filepath, since=None):
+    """Czyta listę konsolidacji (zakładka Consolidatie) i zwraca listę słowników:
+    datum, rit, seq, area, time, amount, kantel, reachers, reacher_text, v, done, lane, comment, busy.
+
+    since: data (datetime.date) – starsze wiersze są pomijane.
+    seq numeruje powtórzenia tego samego RIT-u w jednym dniu (w pliku zdarzają się dwa wiersze).
+    """
+    import openpyxl
+
+    workbook = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+    try:
+        sheets = sorted(workbook.worksheets, key=lambda ws: 0 if ws.title.strip().lower() == "consolidatie" else 1)
+        for ws in sheets:
+            rows = ws.iter_rows(values_only=True)
+            header = None
+            for _ in range(30):
+                row = next(rows, None)
+                if row is None:
+                    break
+                cells = [str(v).strip().lower() if isinstance(v, str) else "" for v in row]
+                if "rit" in cells and "datum" in cells:
+                    header = cells
+                    break
+            if header is None:
+                continue
+
+            def find(*names):
+                return next((i for i, c in enumerate(header) if any(c.startswith(n) for n in names)), None)
+
+            col = {
+                "datum": find("datum"),
+                "rit": find("rit"),
+                "time": find("time", "tijd"),
+                "amount": find("amount", "aantal"),
+                "kantel": find("kantel"),
+                "reacher": find("reacher"),
+                "v": header.index("v") if "v" in header else None,
+                "done": find("done"),
+                "lane": find("lane"),
+                "busy": find("who"),
+            }
+            if col["rit"] is None or col["datum"] is None:
+                continue
+            col["area"] = col["rit"] + 1
+            col["comment"] = col["lane"] + 1 if col["lane"] is not None else None
+
+            def get(row, name):
+                index = col.get(name)
+                return row[index] if index is not None and index < len(row) else None
+
+            result = []
+            seen = {}
+            for row in rows:
+                rit = get(row, "rit")
+                datum = _as_date(get(row, "datum"))
+                if rit is None or str(rit).strip() == "" or datum is None:
+                    continue
+                if since is not None and datum < since:
+                    continue
+                rit = str(rit).strip()
+                if rit.endswith(".0"):
+                    rit = rit[:-2]
+                key = (datum, rit)
+                seen[key] = seen.get(key, 0) + 1
+
+                reacher_raw = get(row, "reacher")
+                reachers = parse_reachers(reacher_raw)
+                area = get(row, "area")
+                text = lambda v: " ".join(str(v).split()) if v is not None else ""  # noqa: E731
+                result.append({
+                    "datum": datum.isoformat(),
+                    "rit": rit,
+                    "seq": seen[key],
+                    "area": text(area).lower() if isinstance(area, str) else "",
+                    "time": _as_time(get(row, "time")),
+                    "amount": _as_int(get(row, "amount")),
+                    "kantel": _as_int(get(row, "kantel")),
+                    "reachers": reachers,
+                    "reacher_text": "" if reachers else text(reacher_raw),
+                    "v": _flag(get(row, "v")),
+                    "done": _flag(get(row, "done")),
+                    "lane": text(get(row, "lane")),
+                    "comment": text(get(row, "comment")),
+                    "busy": text(get(row, "busy")),
+                })
+            return result
+    finally:
+        workbook.close()
+
+    raise ValueError("No consolidation list found (expected a sheet with 'Datum' and 'RIT' columns).")

@@ -4,6 +4,7 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -49,6 +50,7 @@ from .dialogs import (
     HistoryDialog,
     MarkAsLateDialog,
 )
+from .consolidation_view import ConsolidationView
 from .monitoring import MonitoringView
 from .table_model import EmployeeTableModel
 from .widgets import DatabaseLoadWorker, DatabaseTaskWorker, InfoItemDelegate, MainThreadRelay, ToggleButton
@@ -60,6 +62,7 @@ class MainWindow(QMainWindow):
 
         self.with_monitoring = with_monitoring
         self.monitoring_view = None
+        self.consolidation_view = None
 
         self.is_editing_info = False
         self.mark_mode = False
@@ -78,12 +81,20 @@ class MainWindow(QMainWindow):
         self.main_layout.addLayout(top_layout)
 
         if with_monitoring:
-            # Przełącznik widoków: Planning (tabela) <-> Monitoring (tablica)
-            self.view_toggle = ToggleButton(width=50, height=25)
-            self.view_toggle.stateChanged.connect(self.on_view_toggled)
-            top_layout.addWidget(QLabel("Planning"))
-            top_layout.addWidget(self.view_toggle)
-            top_layout.addWidget(QLabel("Monitoring"))
+            # Przełącznik widoków: Planning (tabela) / Monitoring (tablica) / Consolidatie (lista RIT-ów)
+            self.view_buttons = []
+            view_group = QButtonGroup(self)
+            view_group.setExclusive(True)
+            for index, title in enumerate(("Planning", "Monitoring", "Consolidatie")):
+                button = QPushButton(title)
+                button.setCheckable(True)
+                button.setMinimumHeight(40)
+                button.setStyleSheet("QPushButton:checked { background-color: #00BCff; color: #000; }")
+                button.clicked.connect(lambda _=False, i=index: self.show_view(i))
+                view_group.addButton(button, index)
+                top_layout.addWidget(button)
+                self.view_buttons.append(button)
+            self.view_buttons[0].setChecked(True)
             top_layout.addSpacing(15)
 
             self.logins_button = QPushButton("Import Logins")
@@ -207,9 +218,16 @@ class MainWindow(QMainWindow):
             self.monitoring_view.move_requested.connect(self.move_employees)
             self.monitoring_view.toggle_position_requested.connect(self.toggle_position)
 
+            self.consolidation_view = ConsolidationView()
+            self.consolidation_view.update_requested.connect(self.update_consolidation)
+            self.consolidation_view.add_requested.connect(self.add_consolidation)
+            self.consolidation_view.delete_requested.connect(self.delete_consolidation)
+            self.consolidation_view.import_requested.connect(self.import_consolidation)
+
             self.stack = QStackedWidget()
             self.stack.addWidget(self.table)
             self.stack.addWidget(self.monitoring_view)
+            self.stack.addWidget(self.consolidation_view)
             self.main_layout.addWidget(self.stack)
         else:
             self.main_layout.addWidget(self.table)
@@ -346,6 +364,13 @@ class MainWindow(QMainWindow):
             self.update_count_label()
             if self.monitoring_view is not None:
                 self.monitoring_view.set_employees(self.model.all_employees)
+            if self.consolidation_view is not None:
+                try:
+                    self.consolidation_view.set_data(
+                        db.load_consolidation(), self.model.all_employees, db.login_names()
+                    )
+                except Exception as exc:  # lista konsolidacji nie może zablokować reszty
+                    print(f"Consolidation refresh failed: {exc}")
             self.restore_selection(selected_ids)
             self.table.verticalScrollBar().setValue(scroll_value)
             self.set_controls_enabled(True)
@@ -446,8 +471,47 @@ class MainWindow(QMainWindow):
         self.run_db_task(lambda: db.toggle_employee_marked_in_db(emp_id, marked))
 
     # -------------------------------------------------------------- monitoring
-    def on_view_toggled(self, state):
-        self.stack.setCurrentIndex(1 if self.view_toggle.isChecked() else 0)
+    def show_view(self, index):
+        self.stack.setCurrentIndex(index)
+        self.view_buttons[index].setChecked(True)
+
+    # ----------------------------------------------------------- consolidation
+    def _zones_changed(self, changes):
+        """Po zmianie na liście konsolidacji: krótka informacja w pasku stanu, kto zmienił strefę."""
+        if changes:
+            self.statusBar().showMessage("Monitoring: " + "; ".join(changes), 8000)
+
+    def update_consolidation(self, cons_id, fields):
+        self.run_db_task(
+            lambda: db.update_consolidation_in_db(cons_id, **fields),
+            on_finished=self._zones_changed,
+            refresh_after=True,
+        )
+
+    def add_consolidation(self, datum, values):
+        self.run_db_task(lambda: db.add_consolidation_in_db(datum, **values), refresh_after=True)
+
+    def delete_consolidation(self, cons_ids):
+        self.run_db_task(
+            lambda: db.delete_consolidation_in_db(cons_ids), on_finished=self._zones_changed, refresh_after=True
+        )
+
+    def import_consolidation(self):
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Open consolidation list", "", "Excel files (*.xlsx *.xlsm)"
+        )
+        if not filepath:
+            return
+
+        def done(result):
+            added, updated, changes = result
+            QMessageBox.information(
+                self, "Success",
+                f"New RITs: {added}\nUpdated RITs: {updated}"
+                + (f"\n\nZones changed on Monitoring:\n" + "\n".join(changes) if changes else ""),
+            )
+
+        self.run_db_task(lambda: db.import_consolidation_from_excel(filepath), on_finished=done, refresh_after=True)
 
     def toggle_position(self, employee_id, position):
         self.run_db_task(lambda: db.toggle_position_in_db(employee_id, position), refresh_after=True)

@@ -94,6 +94,14 @@ DEPARTMENT_AS_POSITION = {
 MONITORING_GRID_COLUMNS = 8
 
 # Nazwy działów z planu w Excelu -> nazwy w aplikacji (klucze małymi literami)
+# Lista konsolidacji: reacher przypisany do RIT-u dostaje w dziale Reach strefę Kantel i/lub Consolidatie,
+# dopóki RIT nie ma „V" (zwiezione). Potem wracają jego poprzednie strefy.
+CONSOLIDATION_DEPARTMENT = "Reachtruck"
+CONSOLIDATION_KANTEL_ZONE = "Kantel"
+CONSOLIDATION_ZONE = "Consolidatie"
+CONSOLIDATION_IMPORT_DAYS = 2   # import z Excela: wiersze od (dziś - N dni)
+CONSOLIDATION_ACTIVE_DAYS = 1   # otwarte RIT-y starsze niż (dziś - N dni) nie zmieniają już stref
+
 DEPARTMENT_ALIASES = {
     "consolidatie": "Consolidatie/Kantelen",
     "transport coördinator": "Laco",

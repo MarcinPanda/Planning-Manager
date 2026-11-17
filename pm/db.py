@@ -8,14 +8,15 @@ import glob
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from . import config
-from .excel_io import read_logins_excel, read_planning_excel
+from .excel_io import read_consolidation_excel, read_logins_excel, read_planning_excel
 from .logic import (
     Employee,
     Validator,
     join_positions,
+    split_positions,
     move_lastname_prefix_to_firstname,
     name_key,
     parse_breaks,
@@ -107,6 +108,36 @@ def init_db():
             name_key TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             login TEXT NOT NULL
+        )
+    """)
+
+    # Lista konsolidacji (RIT-y). reachers = loginy '003' albo 'id:17' (osoba bez loginu), rozdzielone ';'.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS consolidation (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            datum TEXT NOT NULL,
+            rit TEXT NOT NULL,
+            seq INTEGER NOT NULL DEFAULT 1,
+            area TEXT DEFAULT '',
+            time TEXT DEFAULT '',
+            amount INTEGER DEFAULT 0,
+            kantel INTEGER DEFAULT 0,
+            reachers TEXT DEFAULT '',
+            reacher_text TEXT DEFAULT '',
+            v INTEGER DEFAULT 0,
+            done INTEGER DEFAULT 0,
+            lane TEXT DEFAULT '',
+            comment TEXT DEFAULT '',
+            busy TEXT DEFAULT '',
+            UNIQUE (datum, rit, seq)
+        )
+    """)
+    # Strefy, które reacher miał przed wejściem na konsolidację – wracają po „V".
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS consolidation_prev (
+            employee_id INTEGER PRIMARY KEY,
+            positions TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE
         )
     """)
 
@@ -315,10 +346,7 @@ def _employee_from_row(cursor, row):
     return emp
 
 
-def load_employees_from_db():
-    conn = get_connection()
-    cursor = conn.cursor()
-
+def _load_employees(cursor):
     rows = cursor.execute(f"SELECT {EMP_COLS} FROM employees").fetchall()
     result = [_employee_from_row(cursor, row) for row in rows]
 
@@ -326,9 +354,15 @@ def load_employees_from_db():
     if logins:
         for emp in result:
             emp.login = logins.get(name_key(emp.firstname, emp.lastname), "")
-
-    conn.close()
     return result
+
+
+def load_employees_from_db():
+    conn = get_connection()
+    try:
+        return _load_employees(conn.cursor())
+    finally:
+        conn.close()
 
 
 def load_employee_by_id(cursor, emp_id):
@@ -700,6 +734,7 @@ def move_employees_in_db(employee_ids, dept, position="", time_chosen=None, from
             errors.append(f"{label}: {exc}")
 
     if changed:
+        _sync_consolidation_zones(cursor)  # nowa osoba w Reach może mieć już przypisany RIT
         target = f"{dept} / {position}" if position else dept
         if add and position:
             target += " (added)"
@@ -896,3 +931,288 @@ def import_excel_to_db(filepaths):
 
     unknown = sorted(set(employees_df["current_department"]) - set(config.TEAM_LIST))
     return count, skipped, unknown
+
+
+###############################################################################
+# Consolidation list (RIT-y) -> strefy Kantel / Consolidatie w Reach
+###############################################################################
+
+CONS_COLS = (
+    "id, datum, rit, seq, area, time, amount, kantel, reachers, reacher_text, v, done, lane, comment, busy"
+)
+
+
+def employee_token(emp):
+    """Jak zapisujemy reachera przy RIT-cie: login '003', a bez loginu 'id:17'."""
+    return emp.login or f"id:{emp.employee_id}"
+
+
+def consolidation_zones(amount, kantel):
+    """Strefy, które daje RIT: Kantel, gdy są palety do kantelowania, Consolidatie dla reszty."""
+    zones = []
+    if kantel > 0:
+        zones.append(config.CONSOLIDATION_KANTEL_ZONE)
+    if amount - kantel > 0 or not zones:
+        zones.append(config.CONSOLIDATION_ZONE)
+    return zones
+
+
+def _row_to_dict(row):
+    data = dict(zip([c.strip() for c in CONS_COLS.split(",")], row))
+    data["reachers"] = split_positions(data["reachers"])
+    data["v"] = bool(data["v"])
+    data["done"] = bool(data["done"])
+    return data
+
+
+def load_consolidation(datum=None):
+    """RIT-y z danego dnia ('YYYY-MM-DD'), albo wszystkie, gdy datum=None; posortowane po godzinie."""
+    conn = get_connection()
+    try:
+        if datum:
+            rows = conn.execute(
+                f"SELECT {CONS_COLS} FROM consolidation WHERE datum = ? ORDER BY time, rit, seq", (datum,)
+            ).fetchall()
+        else:
+            rows = conn.execute(f"SELECT {CONS_COLS} FROM consolidation ORDER BY datum, time, rit, seq").fetchall()
+        return [_row_to_dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def consolidation_dates():
+    conn = get_connection()
+    try:
+        return [r[0] for r in conn.execute("SELECT DISTINCT datum FROM consolidation ORDER BY datum").fetchall()]
+    finally:
+        conn.close()
+
+
+def login_names():
+    """login -> nazwisko z pliku loginów (do pokazania reachera, którego nie ma dziś na liście)."""
+    conn = get_connection()
+    try:
+        result = {}
+        for name, login in conn.execute("SELECT name, login FROM logins ORDER BY name").fetchall():
+            result.setdefault(login, name)
+        return result
+    finally:
+        conn.close()
+
+
+def _sync_consolidation_zones(cursor):
+    """Ustawia reacherom strefy Kantel / Consolidatie według otwartych RIT-ów (bez „V").
+
+    - pierwszy otwarty RIT: zapamiętujemy dotychczasowe strefy i zamieniamy je na strefy RIT-u,
+    - kolejne RIT-y: strefy konsolidacji się sumują, ręcznie dodane inne strefy zostają,
+    - ostatni RIT zwieziony („V"): wracają zapamiętane strefy.
+    Dotyczy tylko osób, które są teraz w dziale Reach. Godzin nie zmienia.
+    """
+    managed = {config.CONSOLIDATION_KANTEL_ZONE, config.CONSOLIDATION_ZONE}
+    since = (date.today() - timedelta(days=config.CONSOLIDATION_ACTIVE_DAYS)).isoformat()
+
+    wanted = {}
+    for reachers, amount, kantel in cursor.execute(
+        "SELECT reachers, amount, kantel FROM consolidation WHERE v = 0 AND reachers != '' AND datum >= ?",
+        (since,),
+    ).fetchall():
+        for token in split_positions(reachers):
+            wanted.setdefault(token, set()).update(consolidation_zones(amount or 0, kantel or 0))
+
+    prev = dict(cursor.execute("SELECT employee_id, positions FROM consolidation_prev").fetchall())
+    order = config.SUB_POSITIONS.get(config.CONSOLIDATION_DEPARTMENT, [])
+
+    def ordered(zones):
+        return sorted(zones, key=lambda z: order.index(z) if z in order else len(order))
+
+    changes = []
+    for emp in _load_employees(cursor):
+        emp_id = emp.employee_id
+        if emp.active_department != config.CONSOLIDATION_DEPARTMENT or emp.status in ("sick", "home"):
+            if emp_id in prev:
+                cursor.execute("DELETE FROM consolidation_prev WHERE employee_id = ?", (emp_id,))
+            continue
+
+        want = set()
+        for token in {f"id:{emp_id}", emp.login} - {""}:
+            want |= wanted.get(token, set())
+
+        if want:
+            if emp_id not in prev:
+                cursor.execute(
+                    "INSERT INTO consolidation_prev (employee_id, positions) VALUES (?, ?)", (emp_id, emp.position or "")
+                )
+                base = []
+            else:
+                base = [p for p in emp.positions if p not in managed]
+            new_positions = base + ordered(want)
+        elif emp_id in prev:
+            new_positions = [p for p in split_positions(prev[emp_id]) if p not in managed]
+            cursor.execute("DELETE FROM consolidation_prev WHERE employee_id = ?", (emp_id,))
+        else:
+            continue
+
+        new_value = join_positions(new_positions)
+        if new_value != (emp.position or ""):
+            cursor.execute("UPDATE employees SET position = ? WHERE id = ?", (new_value, emp_id))
+            changes.append(f"{emp.lastname} {emp.firstname} -> {new_value.replace(';', ', ') or '-'}")
+
+    if changes:
+        _record(cursor, "Consolidation zones", "; ".join(changes[:10]))
+    return changes
+
+
+def sync_consolidation_zones():
+    conn = get_connection()
+    try:
+        changes = _sync_consolidation_zones(conn.cursor())
+        conn.commit()
+        return changes
+    finally:
+        conn.close()
+
+
+def _rit_label(cursor, cons_id):
+    row = cursor.execute("SELECT rit, time FROM consolidation WHERE id = ?", (cons_id,)).fetchone()
+    return f"RIT {row[0]} ({row[1]})" if row else f"RIT #{cons_id}"
+
+
+def update_consolidation_in_db(cons_id, **fields):
+    """Zmienia pola RIT-u (reachers jako lista, v / done jako bool, lane, comment...) i od razu
+    przestawia strefy reacherów na Monitoringu. Zwraca listę zmian stref."""
+    allowed = {"reachers", "v", "done", "lane", "comment", "busy", "time", "area", "amount", "kantel", "rit"}
+    unknown = set(fields) - allowed
+    if unknown:
+        raise ValueError(f"Unknown field(s): {', '.join(sorted(unknown))}")
+
+    values = {}
+    for key, value in fields.items():
+        if key == "reachers":
+            values[key] = join_positions(value)
+        elif key in ("v", "done"):
+            values[key] = 1 if value else 0
+        elif key in ("amount", "kantel"):
+            values[key] = int(value or 0)
+        else:
+            values[key] = str(value or "").strip()
+    if "time" in values and values["time"] and not Validator.validate_time_format(values["time"]):
+        raise ValueError("Invalid time format (HH:MM).")
+    if values.get("reachers"):
+        values["reacher_text"] = ""
+    if not values:
+        return []
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        label = _rit_label(cursor, cons_id)
+        sets = ", ".join(f"{k} = ?" for k in values)
+        cursor.execute(f"UPDATE consolidation SET {sets} WHERE id = ?", (*values.values(), cons_id))
+        if cursor.rowcount == 0:
+            raise ValueError("RIT not found.")
+        shown = {k: v for k, v in values.items() if k != "reacher_text"}
+        _record(cursor, "Consolidation", f"{label}: " + ", ".join(f"{k}={v}" for k, v in shown.items()))
+        changes = _sync_consolidation_zones(cursor)
+        conn.commit()
+        return changes
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def add_consolidation_in_db(datum, rit, area="noord", time="", amount=0, kantel=0, comment=""):
+    rit = str(rit).strip()
+    if not rit:
+        raise ValueError("RIT number is required.")
+    if time and not Validator.validate_time_format(time):
+        raise ValueError("Invalid time format (HH:MM).")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        seq = cursor.execute(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM consolidation WHERE datum = ? AND rit = ?", (datum, rit)
+        ).fetchone()[0]
+        cursor.execute("""
+            INSERT INTO consolidation (datum, rit, seq, area, time, amount, kantel, comment)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (datum, rit, seq, area, time, int(amount or 0), int(kantel or 0), comment))
+        new_id = cursor.lastrowid
+        _record(cursor, "Consolidation", f"Added RIT {rit} ({datum} {time})")
+        conn.commit()
+        return new_id
+    finally:
+        conn.close()
+
+
+def delete_consolidation_in_db(cons_ids):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        labels = [_rit_label(cursor, i) for i in cons_ids]
+        cursor.executemany("DELETE FROM consolidation WHERE id = ?", [(i,) for i in cons_ids])
+        _record(cursor, "Consolidation", "Deleted " + ", ".join(labels[:10]))
+        changes = _sync_consolidation_zones(cursor)
+        conn.commit()
+        return changes
+    finally:
+        conn.close()
+
+
+def import_consolidation_from_excel(filepath):
+    """Wczytuje listę konsolidacji od (dziś - CONSOLIDATION_IMPORT_DAYS).
+
+    Nowe RIT-y są dodawane. Istniejące (ta sama data + RIT) dostają z pliku godzinę, strefę i liczby palet;
+    reacher / lane / komentarz z pliku tylko wtedy, gdy w aplikacji są puste; V i Done – gdy są w pliku
+    albo w aplikacji (raz zwiezione zostaje zwiezione).
+    Zwraca (nowe, zaktualizowane, zmiany stref).
+    """
+    since = date.today() - timedelta(days=config.CONSOLIDATION_IMPORT_DAYS)
+    rows = read_consolidation_excel(filepath, since=since)
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    added = updated = 0
+    try:
+        for r in rows:
+            existing = cursor.execute(
+                "SELECT id, reachers, lane, comment, busy, reacher_text FROM consolidation "
+                "WHERE datum = ? AND rit = ? AND seq = ?",
+                (r["datum"], r["rit"], r["seq"]),
+            ).fetchone()
+            reachers = join_positions(r["reachers"])
+            if existing is None:
+                cursor.execute("""
+                    INSERT INTO consolidation (datum, rit, seq, area, time, amount, kantel, reachers, reacher_text,
+                                               v, done, lane, comment, busy)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (r["datum"], r["rit"], r["seq"], r["area"], r["time"], r["amount"], r["kantel"], reachers,
+                      r["reacher_text"], int(r["v"]), int(r["done"]), r["lane"], r["comment"], r["busy"]))
+                added += 1
+            else:
+                cons_id, old_reachers, old_lane, old_comment, old_busy, old_text = existing
+                cursor.execute("""
+                    UPDATE consolidation SET
+                        area = ?, time = ?, amount = ?, kantel = ?,
+                        reachers = ?, reacher_text = ?, lane = ?, comment = ?, busy = ?,
+                        v = MAX(v, ?), done = MAX(done, ?)
+                    WHERE id = ?
+                """, (r["area"], r["time"], r["amount"], r["kantel"],
+                      old_reachers or reachers, old_text if old_reachers else r["reacher_text"],
+                      old_lane or r["lane"], old_comment or r["comment"], old_busy or r["busy"],
+                      int(r["v"]), int(r["done"]), cons_id))
+                updated += 1
+
+        _record(cursor, "Import consolidation",
+                f"{os.path.basename(filepath)}: {added} new, {updated} updated (from {since.isoformat()})")
+        changes = _sync_consolidation_zones(cursor)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return added, updated, changes

@@ -1,0 +1,440 @@
+"""Widok Consolidatie: lista RIT-ów do konsolidacji z przypisanymi reacherami.
+
+Widok niczego sam nie zapisuje – wysyła sygnały, a główne okno zapisuje w bazie.
+Przypisanie reachera do RIT-u (bez „V") daje mu na Monitoringu strefę Kantel / Consolidatie.
+"""
+from datetime import date
+
+from PySide6.QtCore import QTime, Qt, Signal
+from PySide6.QtGui import QBrush, QColor
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QTimeEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .config import CONSOLIDATION_DEPARTMENT
+from .db import consolidation_zones, employee_token
+from .excel_io import parse_reachers
+
+COLUMNS = ["Time", "RIT", "Area", "Amount", "Kantel", "Consol.", "Reacher", "V", "Done", "Lane", "Comment",
+           "Who was busy"]
+COL = {name: i for i, name in enumerate(COLUMNS)}
+EDITABLE_TEXT = {"Time": "time", "Area": "area", "Amount": "amount", "Kantel": "kantel", "Lane": "lane",
+                 "Comment": "comment", "Who was busy": "busy"}
+
+COLOR_DRIVEN = "#c8f0d4"     # V – zwiezione
+COLOR_DONE = "#d9d9d9"       # V + Done – wszystko zrobione
+COLOR_ASSIGNED = "#ffe9a8"   # reacher przypisany, jeszcze wozi
+
+
+def token_label(token, employees_by_token, login_names):
+    emp = employees_by_token.get(token)
+    if emp is not None:
+        name = f"{emp.firstname} {emp.lastname}"
+        return f"{name} [{emp.login}]" if emp.login else name
+    if token.startswith("id:"):
+        return "(removed employee)"
+    name = login_names.get(token)
+    return f"{name} [{token}]" if name else f"[{token}]"
+
+
+class ReacherDialog(QDialog):
+    """Wybór reacherów do RIT-u: lista osób z działu Reach + pole na inne loginy."""
+
+    def __init__(self, rit_label, employees, current_tokens, login_names, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Reacher – {rit_label}")
+        self.resize(420, 520)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Tick the reacher(s) for this RIT.\n"
+                                "They get the Kantel / Consolidatie zone on Monitoring until V is set."))
+
+        self.list = QListWidget()
+        layout.addWidget(self.list)
+
+        by_token = {employee_token(e): e for e in employees}
+        reach = [e for e in employees
+                 if e.active_department == CONSOLIDATION_DEPARTMENT and e.status not in ("sick", "home")]
+        reach.sort(key=lambda e: (e.lastname.lower(), e.firstname.lower()))
+
+        shown = set()
+        for emp in reach:
+            token = employee_token(emp)
+            zones = ", ".join(emp.positions) or "no zone"
+            label = f"{token_label(token, by_token, login_names)}   ·   {zones}"
+            self._add(label, token, token in current_tokens)
+            shown.add(token)
+
+        for token in current_tokens:
+            if token not in shown:
+                self._add(token_label(token, by_token, login_names) + "   ·   not in Reach now", token, True)
+                shown.add(token)
+
+        form = QFormLayout()
+        self.extra_edit = QLineEdit()
+        self.extra_edit.setPlaceholderText("e.g. R052R / 052 (several: separate with /)")
+        form.addRow("Other login(s):", self.extra_edit)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _add(self, label, token, checked):
+        item = QListWidgetItem(label)
+        item.setData(Qt.UserRole, token)
+        item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+        item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        self.list.addItem(item)
+
+    def tokens(self):
+        result = [
+            self.list.item(i).data(Qt.UserRole)
+            for i in range(self.list.count())
+            if self.list.item(i).checkState() == Qt.Checked
+        ]
+        for login in parse_reachers(self.extra_edit.text()):
+            if login not in result:
+                result.append(login)
+        return result
+
+
+class AddRitDialog(QDialog):
+    def __init__(self, datum, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Add RIT – {datum}")
+
+        form = QFormLayout(self)
+        self.rit_edit = QLineEdit()
+        self.area_combo = QComboBox()
+        self.area_combo.addItems(["noord", "zuid"])
+        self.area_combo.setEditable(True)
+        self.time_edit = QTimeEdit(QTime.currentTime())
+        self.time_edit.setDisplayFormat("HH:mm")
+        self.amount_spin = QSpinBox()
+        self.amount_spin.setRange(0, 999)
+        self.kantel_spin = QSpinBox()
+        self.kantel_spin.setRange(0, 999)
+        self.comment_edit = QLineEdit()
+
+        form.addRow("RIT:", self.rit_edit)
+        form.addRow("Area:", self.area_combo)
+        form.addRow("Time:", self.time_edit)
+        form.addRow("Amount (pallets):", self.amount_spin)
+        form.addRow("Kantel (pallets):", self.kantel_spin)
+        form.addRow("Comment:", self.comment_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def _accept(self):
+        if not self.rit_edit.text().strip():
+            QMessageBox.warning(self, "Warning", "Enter the RIT number.")
+            return
+        if self.kantel_spin.value() > self.amount_spin.value():
+            QMessageBox.warning(self, "Warning", "Kantel cannot be more than Amount.")
+            return
+        self.accept()
+
+    def values(self):
+        return {
+            "rit": self.rit_edit.text().strip(),
+            "area": self.area_combo.currentText().strip(),
+            "time": self.time_edit.time().toString("HH:mm"),
+            "amount": self.amount_spin.value(),
+            "kantel": self.kantel_spin.value(),
+            "comment": self.comment_edit.text().strip(),
+        }
+
+
+class ConsolidationView(QWidget):
+    update_requested = Signal(int, object)     # id RIT-u, {pole: wartość}
+    add_requested = Signal(str, object)        # data, wartości z AddRitDialog
+    delete_requested = Signal(list)            # id RIT-ów
+    import_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.rows = []
+        self.shown_rows = []
+        self.employees = []
+        self.login_names = {}
+        self._signature = None
+        self._filling = False
+        self.dialog_open = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("Date:"))
+        self.date_combo = QComboBox()
+        self.date_combo.setMinimumWidth(130)
+        self.date_combo.currentIndexChanged.connect(lambda _: self._rebuild())
+        bar.addWidget(self.date_combo)
+
+        self.hide_finished = QCheckBox("Hide finished (V + Done)")
+        self.hide_finished.toggled.connect(lambda _: self._rebuild())
+        bar.addWidget(self.hide_finished)
+        bar.addSpacing(15)
+
+        self.import_button = QPushButton("Import Consolidatie")
+        self.import_button.setMinimumHeight(32)
+        self.import_button.setToolTip("Load RITs from the Consolidatie Excel file (last days + upcoming)")
+        self.import_button.clicked.connect(self.import_requested)
+        bar.addWidget(self.import_button)
+
+        self.add_button = QPushButton("Add RIT")
+        self.add_button.setMinimumHeight(32)
+        self.add_button.clicked.connect(self._add_rit)
+        bar.addWidget(self.add_button)
+
+        bar.addSpacing(15)
+        self.summary_label = QLabel("")
+        bar.addWidget(self.summary_label)
+        bar.addStretch()
+        layout.addLayout(bar)
+
+        hint = QLabel(
+            "Click the Reacher cell = assign reacher(s): they get the Kantel / Consolidatie zone on Monitoring  ·  "
+            "Tick V when the RIT is driven in = the reacher goes back to their previous zone  ·  "
+            "Done = consolidation finished  ·  Double-click Lane / Comment / Time / pallets to edit"
+        )
+        hint.setStyleSheet("color: #888;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.table = QTableWidget(0, len(COLUMNS))
+        self.table.setHorizontalHeaderLabels(COLUMNS)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
+        self.table.cellClicked.connect(self._on_cell_clicked)
+        self.table.itemChanged.connect(self._on_item_changed)
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        for name, width in (("Time", 60), ("RIT", 80), ("Area", 60), ("Amount", 65), ("Kantel", 60),
+                            ("Consol.", 60), ("Reacher", 330), ("V", 40), ("Done", 50), ("Lane", 70),
+                            ("Comment", 220)):
+            self.table.setColumnWidth(COL[name], width)
+        header.setStretchLastSection(True)
+        layout.addWidget(self.table)
+
+    # ------------------------------------------------------------------ dane
+    @property
+    def busy(self):
+        """Nie przebudowujemy tabeli, gdy ktoś coś w niej edytuje albo ma otwarte okno."""
+        return self.dialog_open or self.table.state() == QAbstractItemView.EditingState
+
+    def current_date(self):
+        return self.date_combo.currentData() or date.today().isoformat()
+
+    def set_data(self, rows, employees, login_names, force=False):
+        signature = (
+            [tuple((k, tuple(v) if isinstance(v, list) else v) for k, v in r.items()) for r in rows],
+            sorted((e.employee_id, e.login, e.lastname, e.firstname, e.active_department, e.position, e.status)
+                   for e in employees),
+            tuple(sorted(login_names.items())),
+        )
+        if not force and signature == self._signature:
+            return
+        if self.busy:
+            return
+        self._signature = signature
+        self.rows = rows
+        self.employees = employees
+        self.login_names = login_names
+        self._fill_dates()
+        self._rebuild()
+
+    def _fill_dates(self):
+        today = date.today().isoformat()
+        dates = sorted({r["datum"] for r in self.rows} | {today})
+        current = self.date_combo.currentData() or today
+        self.date_combo.blockSignals(True)
+        self.date_combo.clear()
+        for d in dates:
+            self.date_combo.addItem(f"{d}  (today)" if d == today else d, d)
+        self.date_combo.setCurrentIndex(max(0, dates.index(current) if current in dates else dates.index(today)))
+        self.date_combo.blockSignals(False)
+
+    def _rebuild(self):
+        datum = self.current_date()
+        rows = [r for r in self.rows if r["datum"] == datum]
+        total_amount = sum(r["amount"] for r in rows)
+        total_kantel = sum(r["kantel"] for r in rows)
+        open_count = sum(1 for r in rows if not r["v"])
+        done_count = sum(1 for r in rows if r["done"])
+        unassigned = sum(1 for r in rows if not r["v"] and not r["reachers"])
+        self.summary_label.setText(
+            f"RITs: {len(rows)}  ·  to drive (no V): {open_count}  ·  without reacher: {unassigned}  ·  "
+            f"done: {done_count}  ·  pallets: {total_amount} (Kantel {total_kantel}, "
+            f"Consolidatie {total_amount - total_kantel})"
+        )
+        if self.hide_finished.isChecked():
+            rows = [r for r in rows if not (r["v"] and r["done"])]
+        self.shown_rows = rows
+
+        by_token = {employee_token(e): e for e in self.employees}
+        for emp in self.employees:
+            if emp.login:
+                by_token.setdefault(f"id:{emp.employee_id}", emp)
+
+        self._filling = True
+        self.table.setRowCount(len(rows))
+        for row_index, r in enumerate(rows):
+            reacher_text = ", ".join(token_label(t, by_token, self.login_names) for t in r["reachers"])
+            values = {
+                "Time": r["time"], "RIT": r["rit"] + (f" ({r['seq']})" if r["seq"] > 1 else ""),
+                "Area": r["area"], "Amount": str(r["amount"]), "Kantel": str(r["kantel"]),
+                "Consol.": str(r["amount"] - r["kantel"]),
+                "Reacher": reacher_text or (r["reacher_text"] and f"? {r['reacher_text']}") or "+ assign",
+                "V": "", "Done": "", "Lane": r["lane"], "Comment": r["comment"], "Who was busy": r["busy"],
+            }
+
+            if r["v"] and r["done"]:
+                color = COLOR_DONE
+            elif r["v"]:
+                color = COLOR_DRIVEN
+            elif r["reachers"]:
+                color = COLOR_ASSIGNED
+            else:
+                color = None
+
+            for name, text in values.items():
+                item = QTableWidgetItem(text)
+                flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+                if name in EDITABLE_TEXT:
+                    flags |= Qt.ItemIsEditable
+                if name in ("V", "Done"):
+                    flags |= Qt.ItemIsUserCheckable
+                    item.setCheckState(Qt.Checked if r["v" if name == "V" else "done"] else Qt.Unchecked)
+                item.setFlags(flags)
+                if name in ("Amount", "Kantel", "Consol.", "Time"):
+                    item.setTextAlignment(Qt.AlignCenter)
+                if name == "Reacher":
+                    zones = ", ".join(consolidation_zones(r["amount"], r["kantel"]))
+                    item.setToolTip(f"Click to assign reacher(s). Zone on Monitoring: {zones}")
+                    if not r["reachers"]:
+                        item.setForeground(QBrush(QColor("#888")))
+                if color:
+                    item.setBackground(QBrush(QColor(color)))
+                    if not (name == "Reacher" and not r["reachers"]):
+                        item.setForeground(QBrush(QColor("#000")))
+                self.table.setItem(row_index, COL[name], item)
+        self._filling = False
+
+    # ------------------------------------------------------------- akcje
+    def row_data(self, row):
+        return self.shown_rows[row] if 0 <= row < len(self.shown_rows) else None
+
+    def _on_cell_clicked(self, row, col):
+        if col == COL["Reacher"]:
+            self.edit_reachers(row)
+
+    def edit_reachers(self, row):
+        r = self.row_data(row)
+        if r is None:
+            return
+        dialog = ReacherDialog(f"RIT {r['rit']} ({r['time']})", self.employees, r["reachers"], self.login_names, self)
+        self.dialog_open = True
+        try:
+            accepted = dialog.exec() == QDialog.Accepted
+        finally:
+            self.dialog_open = False
+        if accepted:
+            tokens = dialog.tokens()
+            if tokens != r["reachers"]:
+                self.update_requested.emit(r["id"], {"reachers": tokens})
+
+    def _on_item_changed(self, item):
+        if self._filling:
+            return
+        r = self.row_data(item.row())
+        if r is None:
+            return
+        name = COLUMNS[item.column()]
+        if name in ("V", "Done"):
+            key = "v" if name == "V" else "done"
+            checked = item.checkState() == Qt.Checked
+            if checked != r[key]:
+                self.update_requested.emit(r["id"], {key: checked})
+        elif name in EDITABLE_TEXT:
+            key = EDITABLE_TEXT[name]
+            text = item.text().strip()
+            if key in ("amount", "kantel"):
+                if not text.isdigit():
+                    QMessageBox.warning(self, "Warning", "Enter a whole number.")
+                    self._rebuild()
+                    return
+                text = int(text)
+            if text != r[key]:
+                self.update_requested.emit(r["id"], {key: text})
+
+    def _add_rit(self):
+        dialog = AddRitDialog(self.current_date(), self)
+        self.dialog_open = True
+        try:
+            accepted = dialog.exec() == QDialog.Accepted
+        finally:
+            self.dialog_open = False
+        if accepted:
+            self.add_requested.emit(self.current_date(), dialog.values())
+
+    def selected_ids(self):
+        rows = sorted({index.row() for index in self.table.selectionModel().selectedRows()})
+        return [self.shown_rows[r]["id"] for r in rows if r < len(self.shown_rows)]
+
+    def _context_menu(self, pos):
+        row = self.table.rowAt(pos.y())
+        if row < 0:
+            return
+        if row not in {i.row() for i in self.table.selectionModel().selectedRows()}:
+            self.table.selectRow(row)
+        menu = QMenu(self)
+        menu.addAction("Assign reacher...", lambda: self.edit_reachers(row))
+        menu.addAction("Remove reacher(s)", lambda: self._clear_reachers(row))
+        menu.addSeparator()
+        menu.addAction("Delete RIT", self._delete_selected)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _clear_reachers(self, row):
+        r = self.row_data(row)
+        if r is not None and r["reachers"]:
+            self.update_requested.emit(r["id"], {"reachers": []})
+
+    def _delete_selected(self):
+        ids = self.selected_ids()
+        if not ids:
+            return
+        reply = QMessageBox.question(self, "Confirm", f"Delete {len(ids)} RIT(s) from the list?")
+        if reply == QMessageBox.Yes:
+            self.delete_requested.emit(ids)
