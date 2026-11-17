@@ -427,6 +427,7 @@ class MonitoringView(QWidget):
         self.zones = {}           # dział -> DropZone (działy bez stref, także Ziek / Naar Huis)
         self.position_zones = {}  # (dział, strefa) -> DropZone
         self.halls = {}
+        self.all_zones = []       # wszystkie strefy z kartami – do jednego zaznaczenia na tablicy
         self.employees = []
         self.from_start_deadline = None   # datetime: kiedy tryb „od początku zmiany" sam się wyłączy
 
@@ -564,6 +565,8 @@ class MonitoringView(QWidget):
 
     # ------------------------------------------------------------- budowa
     def _connect(self, zone):
+        self.all_zones.append(zone)
+        zone.list.itemSelectionChanged.connect(lambda z=zone: self._keep_one_selection(z))
         if zone.department in SIDE_DEPARTMENTS:
             kind = "home" if zone.department == "Naar Huis" else "sick"
             zone.move_requested.connect(lambda ids, *_: self.leave_requested.emit(ids, kind))
@@ -596,6 +599,17 @@ class MonitoringView(QWidget):
 
     def _set_dragging(self, state):
         self.dragging = state
+
+    def _keep_one_selection(self, zone):
+        """Zaznaczenie tylko w jednej strefie naraz na całej tablicy (Ctrl / Shift – kilka osób w tej strefie)."""
+        if not zone.list.selectedItems():
+            return
+        for other in self.all_zones:
+            if other is not zone and other.list.selectedItems():
+                other.list.blockSignals(True)
+                other.list.clearSelection()
+                other.list.blockSignals(False)
+                other.list.viewport().update()
 
     def refresh_theme(self):
         """Ikony w kolorach bieżącego motywu (po zmianie jasny / ciemny)."""

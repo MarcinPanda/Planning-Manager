@@ -147,6 +147,18 @@ def test_view_groups_employees_into_zones(app, temp_db):
     assert view.kpi_labels["Naar Huis"].text() == "Naar Huis:  <b>1</b>"
 
 
+def test_only_one_zone_has_a_selection(app, temp_db):
+    a = make_employee(lastname="A", department="Laden")
+    b = make_employee(lastname="B", department="Buffer")
+    view = MonitoringView()
+    view.set_employees(db.load_employees_from_db())
+    laden, buffer = view.zones["Laden"].list, view.zones["Buffer"].list
+    laden.item(0).setSelected(True)
+    buffer.item(0).setSelected(True)
+    assert not laden.selectedItems() and buffer.selectedItems()   # poprzednie zaznaczenie znika
+    assert (a, b)
+
+
 def test_halls(app, temp_db):
     from pm.config import hall_of
 
