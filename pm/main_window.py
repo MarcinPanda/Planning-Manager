@@ -86,6 +86,13 @@ class MainWindow(QMainWindow):
             top_layout.addWidget(QLabel("Monitoring"))
             top_layout.addSpacing(15)
 
+            self.logins_button = QPushButton("Import Logins")
+            self.logins_button.setFixedWidth(110)
+            self.logins_button.setMinimumHeight(40)
+            self.logins_button.setToolTip("Load the login list (Excel sheet with 'Login:' and 'Name:' columns)")
+            self.logins_button.clicked.connect(self.import_logins)
+            top_layout.addWidget(self.logins_button)
+
         self.load_button = QPushButton("Import Excel")
         self.load_button.setFixedWidth(120)
         self.load_button.setMinimumHeight(40)
@@ -198,6 +205,7 @@ class MainWindow(QMainWindow):
         if with_monitoring:
             self.monitoring_view = MonitoringView()
             self.monitoring_view.move_requested.connect(self.move_employees)
+            self.monitoring_view.toggle_position_requested.connect(self.toggle_position)
 
             self.stack = QStackedWidget()
             self.stack.addWidget(self.table)
@@ -427,7 +435,26 @@ class MainWindow(QMainWindow):
     def on_view_toggled(self, state):
         self.stack.setCurrentIndex(1 if self.view_toggle.isChecked() else 0)
 
-    def move_employees(self, employee_ids, department, position):
+    def toggle_position(self, employee_id, position):
+        self.run_db_task(lambda: db.toggle_position_in_db(employee_id, position), refresh_after=True)
+
+    def import_logins(self):
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Open login list", "", "Excel files (*.xlsx *.xlsm)"
+        )
+        if not filepath:
+            return
+
+        def done(result):
+            count, matched, total = result
+            QMessageBox.information(
+                self, "Success",
+                f"Logins loaded: {count}\nEmployees on the list with a login: {matched} of {total}",
+            )
+
+        self.run_db_task(lambda: db.import_logins_from_excel(filepath), on_finished=done, refresh_after=True)
+
+    def move_employees(self, employee_ids, department, position, from_position="", add=False):
         """Kostka upuszczona w widoku Monitoring: zapis od razu, z aktualną godziną."""
         if not employee_ids:
             return
@@ -445,7 +472,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Warning", "\n".join(errors))
 
         self.run_db_task(
-            lambda: db.move_employees_in_db(employee_ids, department, position),
+            lambda: db.move_employees_in_db(
+                employee_ids, department, position, from_position=from_position, add=add
+            ),
             on_finished=done,
             refresh_after=True,
         )

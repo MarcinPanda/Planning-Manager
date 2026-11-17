@@ -11,11 +11,13 @@ import sqlite3
 from datetime import datetime
 
 from . import config
-from .excel_io import read_planning_excel
+from .excel_io import read_logins_excel, read_planning_excel
 from .logic import (
     Employee,
     Validator,
+    join_positions,
     move_lastname_prefix_to_firstname,
+    name_key,
     parse_breaks,
     serialize_breaks,
     to_minutes,
@@ -96,6 +98,15 @@ def init_db():
             details TEXT DEFAULT '',
             undo_data TEXT,
             undone INTEGER DEFAULT 0
+        )
+    """)
+
+    # Loginy trzymamy osobno, po nazwisku – przeżywają "Clear Data" i kolejne importy planu.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS logins (
+            name_key TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            login TEXT NOT NULL
         )
     """)
 
@@ -295,6 +306,11 @@ def load_employees_from_db():
 
     rows = cursor.execute(f"SELECT {EMP_COLS} FROM employees").fetchall()
     result = [_employee_from_row(cursor, row) for row in rows]
+
+    logins = dict(cursor.execute("SELECT name_key, login FROM logins").fetchall())
+    if logins:
+        for emp in result:
+            emp.login = logins.get(name_key(emp.firstname, emp.lastname), "")
 
     conn.close()
     return result
@@ -588,10 +604,12 @@ def edit_departments_in_db(employee_ids, new_dept):
     conn.close()
 
 
-def move_employees_in_db(employee_ids, dept, position="", time_chosen=None):
+def move_employees_in_db(employee_ids, dept, position="", time_chosen=None, from_position="", add=False):
     """Przeniesienie w widoku Monitoring (upuszczenie kostki na dział / pozycję).
 
-    - ten sam dział, inna pozycja  -> zmienia się tylko pozycja (godziny bez zmian),
+    - ten sam dział, inna pozycja  -> zmienia się tylko pozycja (godziny bez zmian);
+      add=True dokłada pozycję do już posiadanych (praca w kilku strefach naraz),
+      inaczej pozycja from_position jest zamieniana na nową,
     - przed początkiem pracy       -> zmienia się dział początkowy (jak Edit Department),
     - w trakcie pracy              -> nowy wpis działu od teraz (jak Add Department).
     Zwraca listę błędów.
@@ -622,9 +640,15 @@ def move_employees_in_db(employee_ids, dept, position="", time_chosen=None):
                 raise ValueError("Already went home.")
 
             if current == dept:
-                if emp.position == position:
+                positions = emp.positions
+                if add:
+                    new_positions = positions + [position]
+                else:
+                    new_positions = [p for p in positions if p != from_position] + [position]
+                new_value = join_positions(new_positions)
+                if new_value == join_positions(positions):
                     continue
-                cursor.execute("UPDATE employees SET position = ? WHERE id = ?", (position, emp_id))
+                cursor.execute("UPDATE employees SET position = ? WHERE id = ?", (new_value, emp_id))
                 changed.append(emp_id)
                 continue
 
@@ -662,6 +686,8 @@ def move_employees_in_db(employee_ids, dept, position="", time_chosen=None):
 
     if changed:
         target = f"{dept} / {position}" if position else dept
+        if add and position:
+            target += " (added)"
         _record(
             cursor, "Move",
             f"-> {target} @ {time_chosen}: {_names(cursor, changed)}",
@@ -671,6 +697,63 @@ def move_employees_in_db(employee_ids, dept, position="", time_chosen=None):
     conn.commit()
     conn.close()
     return errors
+
+
+def toggle_position_in_db(emp_id, position):
+    """Włącza / wyłącza jedną pozycję (klienta, strefę) u pracownika. Godzin nie zmienia."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    emp = load_employee_by_id(cursor, emp_id)
+    if emp is None:
+        conn.close()
+        raise ValueError("Employee not found.")
+
+    positions = emp.positions
+    if position in positions:
+        positions.remove(position)
+        verb = "removed"
+    else:
+        positions.append(position)
+        verb = "added"
+
+    _record(
+        cursor, "Position",
+        f"{emp.lastname} {emp.firstname}: {position} {verb}",
+        restore=_snapshot(cursor, [emp_id]),
+    )
+    cursor.execute("UPDATE employees SET position = ? WHERE id = ?", (join_positions(positions), emp_id))
+
+    conn.commit()
+    conn.close()
+
+
+def import_logins_from_excel(filepath):
+    """Wczytuje spis loginów. Zwraca (liczba loginów, ilu obecnych pracowników dopasowano)."""
+    pairs = read_logins_excel(filepath)
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        for name, login in pairs:
+            cursor.execute(
+                "INSERT OR REPLACE INTO logins (name_key, name, login) VALUES (?, ?, ?)",
+                (name_key(name), name, login),
+            )
+
+        known = {r[0] for r in cursor.execute("SELECT name_key FROM logins").fetchall()}
+        people = cursor.execute("SELECT firstname, lastname FROM employees").fetchall()
+        matched = sum(1 for first, last in people if name_key(first, last) in known)
+
+        _record(cursor, "Import logins", f"{len(pairs)} logins, {matched} of {len(people)} employees matched")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return len(pairs), matched, len(people)
 
 
 def mark_employees_late_in_db(items):

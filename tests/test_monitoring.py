@@ -109,8 +109,78 @@ def test_view_groups_employees_into_zones(app, temp_db):
     # upuszczenie na strefę wysyła prośbę o przeniesienie
     received = []
     view.move_requested.connect(lambda *args: received.append(args))
-    view.zones[("Reachtruck", "Zuid")].list.dropped.emit([a])
-    assert received == [([a], "Reachtruck", "Zuid")]
+    view.zones[("Reachtruck", "Zuid")].list.dropped.emit([a], "Pladis (22)", True)
+    assert received == [([a], "Reachtruck", "Zuid", "Pladis (22)", True)]
+
+
+def test_several_zones_at_once(app, temp_db):
+    emp_id = make_employee(department="Reachtruck")
+
+    db.move_employees_in_db([emp_id], "Reachtruck", "Noord", "09:00")
+    db.move_employees_in_db([emp_id], "Reachtruck", "Replenish", "09:05", from_position="Noord", add=True)
+    emp = _one()
+    assert emp.positions == ["Noord", "Replenish"]
+    assert emp.dept_times == [("Reachtruck", "")]   # godziny bez zmian
+    assert emp.computed_hours == "8.00"
+
+    # kostka jest widoczna w obu strefach
+    view = MonitoringView()
+    view.set_employees(db.load_employees_from_db())
+    assert view.zones[("Reachtruck", "Noord")].list.count() == 1
+    assert view.zones[("Reachtruck", "Replenish")].list.count() == 1
+    assert view.zones[("Reachtruck", "")].list.count() == 0
+
+    # zwykłe przeciągnięcie kostki z Noord na Zuid zamienia tylko tę jedną strefę
+    db.move_employees_in_db([emp_id], "Reachtruck", "Zuid", "09:10", from_position="Noord")
+    assert _one().positions == ["Replenish", "Zuid"]
+
+    # menu pod prawym przyciskiem: włącz / wyłącz strefę
+    db.toggle_position_in_db(emp_id, "Kantel")
+    assert _one().positions == ["Replenish", "Zuid", "Kantel"]
+    db.toggle_position_in_db(emp_id, "Zuid")
+    assert _one().positions == ["Replenish", "Kantel"]
+    db.undo_last()
+    assert _one().positions == ["Replenish", "Zuid", "Kantel"]
+
+    # upuszczenie na „No position" zdejmuje tylko strefę, z której przeciągano
+    db.move_employees_in_db([emp_id], "Reachtruck", "", "09:20", from_position="Kantel")
+    assert _one().positions == ["Replenish", "Zuid"]
+
+    # przejście do innego działu kasuje strefy
+    db.move_employees_in_db([emp_id], "Laden", "", "10:00")
+    assert _one().positions == []
+
+
+def test_logins_import_and_matching(app, temp_db):
+    import pandas as pd
+    from pm.logic import name_key
+
+    assert name_key("Jan van", "Dijk") == name_key("jan VAN dijk")
+    assert name_key("Łukasz", "Żółw") == name_key("lukasz zolw")
+
+    make_employee(lastname="Dijk", firstname="Jan van")
+    make_employee(lastname="Nowak", firstname="Ewa")
+
+    path = str(temp_db / "logins.xlsx")
+    rows = [[None, None, None], [None, "Login:", "Name:"], [None, "007", "Jan van Dijk"],
+            [None, "012", "Somebody Else"], [None, "0", "0"]]
+    with pd.ExcelWriter(path) as writer:
+        pd.DataFrame([["x"]]).to_excel(writer, sheet_name="Tools", header=False, index=False)
+        pd.DataFrame(rows).to_excel(writer, sheet_name="Logins", header=False, index=False)
+
+    assert db.import_logins_from_excel(path) == (2, 1, 2)
+
+    by_name = {e.lastname: e.login for e in db.load_employees_from_db()}
+    assert by_name == {"Dijk": "7", "Nowak": ""}
+
+    # loginy zostają po wyczyszczeniu listy i ponownym dodaniu osoby
+    db.clear_all_data_in_db()
+    make_employee(lastname="Dijk", firstname="Jan van")
+    assert db.load_employees_from_db()[0].login == "7"
+
+    view = MonitoringView()
+    view.set_employees(db.load_employees_from_db())
+    assert "[7]" in view.zones[("Buffer", "")].list.item(0).text()
 
 
 def test_main_window_with_monitoring(app, temp_db):

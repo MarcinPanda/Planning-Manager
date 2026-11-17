@@ -112,3 +112,31 @@ def export_rows_to_excel(rows, filepath):
     """rows: lista list wartości w kolejności kolumn tabeli (bez kolumny Marked)."""
     df = pd.DataFrame(rows, columns=col_names[1:])
     df.to_excel(filepath, index=False, sheet_name="Planning")
+
+
+def read_logins_excel(filepath):
+    """Czyta spis loginów: szuka nagłówków 'Login:' i 'Name:' (najpierw w arkuszu 'Logins').
+    Zwraca listę (nazwisko, login)."""
+    sheets = pd.read_excel(filepath, sheet_name=None, header=None, dtype=str)
+    names = sorted(sheets, key=lambda n: 0 if n.strip().lower() == "logins" else 1)
+
+    for sheet_name in names:
+        data = sheets[sheet_name]
+        for r in range(min(len(data), 30)):
+            cells = [str(v).strip().lower().rstrip(":") if isinstance(v, str) else "" for v in data.iloc[r]]
+            if "login" in cells and "name" in cells:
+                login_col, name_col = cells.index("login"), cells.index("name")
+                result = []
+                for i in range(r + 1, len(data)):
+                    login, name = data.iat[i, login_col], data.iat[i, name_col]
+                    if not isinstance(login, str) or not isinstance(name, str):
+                        continue
+                    login, name = login.strip(), name.strip()
+                    if login.endswith(".0"):
+                        login = login[:-2]
+                    login = login.lstrip("0") or "0"
+                    if name and name != "0" and login != "0":
+                        result.append((name, login))
+                return result
+
+    raise ValueError("No 'Login:' / 'Name:' columns found in this file.")

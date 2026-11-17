@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -44,13 +45,15 @@ ZONE_STYLE_HOVER = "DropZone { border: 2px solid #00BCff; border-radius: 4px; }"
 class EmployeeList(QListWidget):
     """Lista kostek w jednej strefie. Obsługuje przeciąganie i upuszczanie."""
 
-    dropped = Signal(list)   # id pracowników upuszczonych na tę listę
+    dropped = Signal(list, str, bool)   # id pracowników, pozycja źródłowa, czy z Ctrl (dołóż)
+    context_requested = Signal(int, object)  # id pracownika, pozycja kursora na ekranie
     drag_state = Signal(bool)
     hover = Signal(bool)
 
     def __init__(self, accepts_drops=True, parent=None):
         super().__init__(parent)
         self.accepts_drops = accepts_drops
+        self.zone_position = ""
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setDragEnabled(True)
         self.setAcceptDrops(accepts_drops)
@@ -70,14 +73,14 @@ class EmployeeList(QListWidget):
             return
 
         mime = QMimeData()
-        mime.setData(MIME_TYPE, json.dumps(ids).encode("utf-8"))
+        mime.setData(MIME_TYPE, json.dumps({"ids": ids, "from": self.zone_position}).encode("utf-8"))
 
         drag = QDrag(self)
         drag.setMimeData(mime)
 
         self.drag_state.emit(True)
         try:
-            drag.exec(Qt.MoveAction)
+            drag.exec(Qt.MoveAction | Qt.CopyAction, Qt.MoveAction)
         finally:
             self.drag_state.emit(False)
 
@@ -108,21 +111,30 @@ class EmployeeList(QListWidget):
             return
 
         try:
-            ids = json.loads(bytes(event.mimeData().data(MIME_TYPE)).decode("utf-8"))
+            payload = json.loads(bytes(event.mimeData().data(MIME_TYPE)).decode("utf-8"))
+            ids = [int(i) for i in payload["ids"]]
+            from_position = str(payload.get("from", ""))
         except Exception:
             event.ignore()
             return
 
+        add = bool(event.modifiers() & Qt.ControlModifier)  # Ctrl = dołóż strefę zamiast przenosić
         event.acceptProposedAction()
         if event.source() is not self:
-            self.dropped.emit([int(i) for i in ids])
+            self.dropped.emit(ids, from_position, add)
+
+    def contextMenuEvent(self, event):
+        item = self.itemAt(event.pos())
+        if item is not None:
+            self.context_requested.emit(int(item.data(Qt.UserRole)), event.globalPos())
 
 
 class DropZone(QFrame):
     """Jedna strefa tablicy: dział albo pozycja (klient / strefa) wewnątrz działu."""
 
-    move_requested = Signal(list, str, str)  # ids, dział, pozycja
+    move_requested = Signal(list, str, str, str, bool)  # ids, dział, pozycja, pozycja źródłowa, dołóż
     drag_state = Signal(bool)
+    context_requested = Signal(int, object)
 
     def __init__(self, title, department, position="", accepts_drops=True, parent=None):
         super().__init__(parent)
@@ -143,7 +155,11 @@ class DropZone(QFrame):
         layout.addWidget(self.title_label)
 
         self.list = EmployeeList(accepts_drops)
-        self.list.dropped.connect(lambda ids: self.move_requested.emit(ids, self.department, self.position))
+        self.list.zone_position = position
+        self.list.dropped.connect(
+            lambda ids, source, add: self.move_requested.emit(ids, self.department, self.position, source, add)
+        )
+        self.list.context_requested.connect(self.context_requested)
         self.list.drag_state.connect(self.drag_state)
         self.list.hover.connect(lambda on: self.setStyleSheet(ZONE_STYLE_HOVER if on else ZONE_STYLE))
         layout.addWidget(self.list)
@@ -153,7 +169,11 @@ class DropZone(QFrame):
 
         for emp in sorted(employees, key=lambda e: (e.firstname.casefold(), e.lastname.casefold())):
             since = emp.active_since
-            text = f"{emp.firstname} {emp.lastname}" + (f"  ·  {since}" if since else "")
+            text = (
+                f"{emp.firstname} {emp.lastname}"
+                + (f"  [{emp.login}]" if emp.login else "")
+                + (f"  ·  {since}" if since else "")
+            )
 
             item = QListWidgetItem(text)
             item.setData(Qt.UserRole, emp.employee_id)
@@ -161,7 +181,9 @@ class DropZone(QFrame):
             item.setForeground(QBrush(QColor("#000000")))
             item.setToolTip(
                 f"{emp.lastname} {emp.firstname}\n"
-                f"Work hours: {emp.work_hours}\n"
+                f"Login: {emp.login or '-'}\n"
+                + (f"Positions: {', '.join(emp.positions)}\n" if emp.positions else "")
+                + f"Work hours: {emp.work_hours}\n"
                 f"Total: {emp.computed_hours} h\n"
                 f"Here since: {since or 'start of work'}"
                 + (f"\nInfo: {emp.info}" if emp.info else "")
@@ -180,7 +202,8 @@ class DropZone(QFrame):
 class MonitoringView(QWidget):
     """Tablica: Piking i Reach Outbound z pozycjami, pod spodem wszystkie pozostałe działy."""
 
-    move_requested = Signal(list, str, str)
+    move_requested = Signal(list, str, str, str, bool)
+    toggle_position_requested = Signal(int, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -188,6 +211,7 @@ class MonitoringView(QWidget):
         self.dragging = False
         self._signature = None
         self.zones = {}        # (dział, pozycja) -> DropZone
+        self._by_id = {}
         self.other_zone = None
 
         outer = QVBoxLayout(self)
@@ -199,6 +223,13 @@ class MonitoringView(QWidget):
 
         container = QWidget()
         layout = QVBoxLayout(container)
+
+        hint = QLabel(
+            "Drag = move  ·  Ctrl + drag = also work in that zone  ·  "
+            "Right-click a name = choose zones  ·  Ctrl / Shift + click = select several"
+        )
+        hint.setStyleSheet("color: #888;")
+        layout.addWidget(hint)
         scroll.setWidget(container)
 
         # Działy z pozycjami (klienci / strefy)
@@ -247,23 +278,46 @@ class MonitoringView(QWidget):
         self.zones[(zone.department, zone.position)] = zone
         zone.move_requested.connect(self.move_requested)
         zone.drag_state.connect(self._set_dragging)
+        zone.context_requested.connect(self._show_position_menu)
+
+    def _show_position_menu(self, emp_id, global_pos):
+        """Menu pod prawym przyciskiem: zaznaczanie stref / klientów, w których osoba pracuje."""
+        emp = self._by_id.get(emp_id)
+        if emp is None or emp.status == "home":
+            return
+        available = SUB_POSITIONS.get(emp.active_department)
+        if not available:
+            return
+
+        menu = QMenu(self)
+        current = emp.positions
+        for position in available:
+            action = menu.addAction(position)
+            action.setCheckable(True)
+            action.setChecked(position in current)
+            action.triggered.connect(
+                lambda _checked=False, p=position: self.toggle_position_requested.emit(emp_id, p)
+            )
+        menu.exec(global_pos)
 
     def _set_dragging(self, state):
         self.dragging = state
 
-    def zone_key_for(self, emp):
-        """Do której strefy należy pracownik (None = strefa „Other")."""
+    def zone_keys_for(self, emp):
+        """W których strefach pokazać pracownika (pusta lista = strefa „Other").
+        Osoba pracująca w kilku strefach ma kostkę w każdej z nich."""
         dept = emp.active_department
-        if (dept, emp.position) in self.zones:
-            return (dept, emp.position)
+        keys = [(dept, p) for p in emp.positions if (dept, p) in self.zones]
+        if keys:
+            return keys
         if (dept, "") in self.zones:
-            return (dept, "")
-        return None
+            return [(dept, "")]
+        return []
 
     def set_employees(self, employees, force=False):
         """Przebudowuje tablicę, ale tylko gdy coś się zmieniło (żeby nie migała co 10 s)."""
         signature = sorted(
-            (e.employee_id, e.lastname, e.firstname, e.active_department, e.position,
+            (e.employee_id, e.lastname, e.firstname, e.login, e.active_department, e.position,
              e.active_since, e.status, e.work_hours, e.computed_hours, e.info)
             for e in employees
         )
@@ -275,11 +329,12 @@ class MonitoringView(QWidget):
 
         groups = {key: [] for key in self.zones}
         other = []
+        self._by_id = {emp.employee_id: emp for emp in employees}
         for emp in employees:
-            key = self.zone_key_for(emp)
-            if key is None:
+            keys = self.zone_keys_for(emp)
+            if not keys:
                 other.append(emp)
-            else:
+            for key in keys:
                 groups[key].append(emp)
 
         for key, zone in self.zones.items():

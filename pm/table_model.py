@@ -122,7 +122,7 @@ class EmployeeTableModel(QAbstractTableModel):
             return
 
         def matches(emp):
-            haystack = " ".join(str(v) for v in emp.to_ui_values()[1:]).casefold()
+            haystack = " ".join([*(str(v) for v in emp.to_ui_values()[1:]), emp.login, emp.position]).casefold()
             return all(word in haystack for word in words)
 
         self.employees = [emp for emp in self.all_employees if matches(emp)]

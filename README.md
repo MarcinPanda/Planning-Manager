@@ -70,3 +70,16 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
 | `pm/main_window.py` | główne okno |
 | `tests/` | testy automatyczne |
 | `Planning + Monitoring.py` | projekt poboczny (prototyp widoku Monitoring) – nie jest częścią aplikacji |
+
+## Wersja z Monitoringiem (`planning_monitoring.py`)
+
+Ta sama aplikacja i baza, dodatkowo przełącznik Planning / Monitoring.
+
+- Tablica wszystkich działów; pracownik to kostka z nazwiskiem, loginem i godziną zmiany.
+- Przeciągnięcie na inny dział zapisuje zmianę działu z aktualną godziną.
+- Piking i Reach Outbound mają pozycje (klienci, strefy). Dla godzin liczy się tylko dział.
+- Jedna osoba może być w kilku pozycjach naraz: Ctrl + przeciągnięcie albo prawy przycisk na nazwisku.
+- „Import Logins" wczytuje spis loginów z Excela (kolumny `Login:` i `Name:`); loginy są
+  dopasowywane po nazwisku i zostają w bazie na kolejne dni.
+
+Budowanie: `.venv\Scripts\python -m PyInstaller Planning_Monitoring.spec --noconfirm --distpath dist --workpath build`

@@ -1,4 +1,6 @@
 """Logika biznesowa: czas pracy, przerwy, nazwiska, model pracownika (bez Qt i bez bazy)."""
+import unicodedata
+
 from .config import (
     DAY8TO17_BREAKS,
     LASTNAME_CORRECTIONS,
@@ -171,6 +173,29 @@ def parse_breaks(text):
     return result
 
 
+def split_positions(text):
+    return [p.strip() for p in (text or "").split(";") if p.strip()]
+
+
+def join_positions(positions):
+    result = []
+    for p in positions:
+        if p and p not in result:
+            result.append(p)
+    return ";".join(result)
+
+
+def name_key(*parts):
+    """Klucz do dopasowania osoby po nazwisku niezależnie od kolejności słów,
+    wielkości liter i znaków diakrytycznych ('Jan van Dijk' == 'Dijk, Jan van')."""
+    text = " ".join(str(p) for p in parts if p)
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.replace("ł", "l").replace("Ł", "L")
+    words = "".join(ch if ch.isalnum() else " " for ch in text).casefold().split()
+    return " ".join(sorted(words))
+
+
 class Employee:
     def __init__(
         self,
@@ -199,7 +224,8 @@ class Employee:
         self.info = info or ""
         self.custom_breaks = custom_breaks if custom_breaks else []
         self.late = bool(late)
-        self.position = position or ""  # klient / strefa w Monitoringu
+        self.position = position or ""  # klienci / strefy w Monitoringu, rozdzielone ';'
+        self.login = ""                 # uzupełniany z tabeli loginów przy wczytaniu
         self._dept_ui = [""] * 10
         self.dept_intervals = []
         self.dept_times = [(current_department, "")]
@@ -283,6 +309,11 @@ class Employee:
         self.computed_hours = f"{total_hours:.2f}"
         self.dept_intervals = [(dept, dept_hours[dept]) for dept in dept_order]
         self._build_dept_ui()
+
+    @property
+    def positions(self):
+        """Lista pozycji (klientów / stref), w których osoba pracuje jednocześnie."""
+        return split_positions(self.position)
 
     @property
     def active_department(self):
