@@ -367,8 +367,25 @@ def _load_employees(cursor):
     logins = dict(cursor.execute("SELECT name_key, login FROM logins").fetchall())
     if logins:
         for emp in result:
-            emp.login = logins.get(name_key(emp.firstname, emp.lastname), "")
+            emp.login = find_login(name_key(emp.firstname, emp.lastname), logins)
     return result
+
+
+def find_login(key, logins):
+    """Login dla osoby: najpierw dokładnie to samo imię i nazwisko, potem – gdy w jednym pliku jest
+    dłuższa wersja (np. plan „Ahmad Khalaf", plik loginów „AHMAD-NICOLAE KHALAF") – jedyny login,
+    którego słowa zawierają wszystkie słowa osoby (albo odwrotnie). Przy kilku kandydatach: brak."""
+    if key in logins:
+        return logins[key]
+    words = set(key.split())
+    if len(words) < 2:
+        return ""
+    candidates = set()
+    for other_key, login in logins.items():
+        other = set(other_key.split())
+        if len(other) >= 2 and (words <= other or other <= words):
+            candidates.add(login)
+    return candidates.pop() if len(candidates) == 1 else ""
 
 
 def load_employees_from_db():
@@ -1026,9 +1043,9 @@ def import_logins_from_excel(filepath):
                 (name_key(name), name, login),
             )
 
-        known = {r[0] for r in cursor.execute("SELECT name_key FROM logins").fetchall()}
+        known = dict(cursor.execute("SELECT name_key, login FROM logins").fetchall())
         people = cursor.execute("SELECT firstname, lastname FROM employees").fetchall()
-        matched = sum(1 for first, last in people if name_key(first, last) in known)
+        matched = sum(1 for first, last in people if find_login(name_key(first, last), known))
 
         _record(cursor, "Import logins", f"{len(pairs)} logins, {matched} of {len(people)} employees matched")
         conn.commit()

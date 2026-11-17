@@ -67,6 +67,8 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
 | `pm/table_model.py` | model tabeli (filtr, sortowanie, kolory) |
 | `pm/dialogs.py` | okna dialogowe |
 | `pm/widgets.py` | przełącznik, wątki robocze, delegat pola Info |
+| `pm/theme.py` | wygląd: motyw jasny / ciemny (menu ⚙ → Switch theme), ikony w kolorze motywu |
+| `pm/assets/` | ikony (`icons/`), logo; `source/` = arkusze z ChatGPT, cięte przez `tools/cut_icons.py` |
 | `pm/main_window.py` | główne okno |
 | `tests/` | testy automatyczne |
 

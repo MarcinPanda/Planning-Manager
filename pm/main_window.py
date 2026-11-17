@@ -22,10 +22,12 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QPushButton,
     QTableView,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 from PySide6.QtCore import (
+    QSize,
     QTime,
     QEasingCurve,
     QPropertyAnimation,
@@ -39,10 +41,10 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QKeySequence, QPageLayout, QShortcut, QTextDocument
+from PySide6.QtGui import QKeySequence, QPageLayout, QPixmap, QShortcut, QTextDocument
 from PySide6.QtPrintSupport import QPrintPreviewDialog, QPrinter
 
-from . import db
+from . import db, theme
 from .config import ROW_COLOR_HOME, ROW_COLOR_LATE, ROW_COLOR_SICK, SYNC_INTERVAL_MS, col_names, columns
 from .excel_io import export_rows_to_excel
 from .dialogs import (
@@ -64,6 +66,7 @@ VIEWS = [
     ("Monitoring", "Who is where right now – drag employees between departments"),
     ("Consolidatie", "Consolidation list (RITs) – reacher assignment changes their task on Monitoring"),
 ]
+VIEW_ICONS = ["planning", "monitoring", "consolidation"]
 
 
 class MainWindow(QMainWindow):
@@ -77,7 +80,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Planning Manager")
         self.setGeometry(100, 100, 1200, 600)
 
-        # Układ okna: menu widoków po lewej, po prawej pasek przycisków + bieżący widok
+        self._icon_targets = []   # (widget / akcja, nazwa ikony) – odświeżane przy zmianie motywu
+
+        # Układ okna: menu widoków po lewej; po prawej pasek z tytułem i akcjami + bieżący widok
         self.main_widget = QWidget()
         self.setCentralWidget(self.main_widget)
         outer_layout = QHBoxLayout(self.main_widget)
@@ -86,92 +91,16 @@ class MainWindow(QMainWindow):
         outer_layout.addWidget(self._build_sidebar())
 
         content = QWidget()
-        self.main_layout = QVBoxLayout(content)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
         outer_layout.addWidget(content, 1)
+        content_layout.addWidget(self._build_topbar())
 
-        top_layout = QHBoxLayout()
-        top_layout.setContentsMargins(5, 5, 5, 5)
-        top_layout.setSpacing(3)
-        self.main_layout.addLayout(top_layout)
-
-        self.logins_button = QPushButton("Import Logins")
-        self.logins_button.setFixedWidth(110)
-        self.logins_button.setMinimumHeight(40)
-        self.logins_button.setToolTip("Load the login list (Excel sheet with 'Login:' and 'Name:' columns)")
-        self.logins_button.clicked.connect(self.import_logins)
-        top_layout.addWidget(self.logins_button)
-
-        self.load_button = QPushButton("Import Excel")
-        self.load_button.setFixedWidth(120)
-        self.load_button.setMinimumHeight(40)
-        self.load_button.clicked.connect(self.load_excel)
-        top_layout.addWidget(self.load_button)
-
-        self.clear_button = QPushButton("Clear Data")
-        self.clear_button.setFixedWidth(120)
-        self.clear_button.setMinimumHeight(40)
-        self.clear_button.clicked.connect(self.clear_data)
-        top_layout.addWidget(self.clear_button)
-
-        self.add_emp_button = QPushButton("Add Employee")
-        self.add_emp_button.setFixedWidth(120)
-        self.add_emp_button.setMinimumHeight(40)
-        self.add_emp_button.clicked.connect(self.add_employee)
-        top_layout.addWidget(self.add_emp_button)
-
-        self.remove_emp_button = QPushButton("Remove Employee")
-        self.remove_emp_button.setFixedWidth(150)
-        self.remove_emp_button.setMinimumHeight(40)
-        self.remove_emp_button.clicked.connect(self.remove_employee)
-        top_layout.addWidget(self.remove_emp_button)
-
-        self.undo_button = QPushButton("Undo")
-        self.undo_button.setFixedWidth(80)
-        self.undo_button.setMinimumHeight(40)
-        self.undo_button.setToolTip("Undo the last change (Ctrl+Z)")
-        self.undo_button.clicked.connect(self.undo_last)
-        top_layout.addWidget(self.undo_button)
-
-        self.history_button = QPushButton("History")
-        self.history_button.setFixedWidth(80)
-        self.history_button.setMinimumHeight(40)
-        self.history_button.clicked.connect(self.show_history)
-        top_layout.addWidget(self.history_button)
-
-        self.export_button = QPushButton("Export Excel")
-        self.export_button.setFixedWidth(110)
-        self.export_button.setMinimumHeight(40)
-        self.export_button.clicked.connect(self.export_excel)
-        top_layout.addWidget(self.export_button)
-
-        self.print_button = QPushButton("Print")
-        self.print_button.setFixedWidth(80)
-        self.print_button.setMinimumHeight(40)
-        self.print_button.clicked.connect(self.print_table)
-        top_layout.addWidget(self.print_button)
-
-        top_layout.addSpacing(10)
-
-        self.count_label = QLabel("")
-        top_layout.addWidget(self.count_label)
-
-        top_layout.addStretch()
-
-        self.mark_mode_label = QLabel("Mark Mode OFF")
-        self.mark_mode_label.setFixedWidth(100)
-
-        self.toggle_mark_button = ToggleButton(
-            width=50,
-            height=25,
-            bgColor="#777",
-            circleColor="#DDD",
-            activeColor="#00BCff",
-        )
-        self.toggle_mark_button.stateChanged.connect(self.toggle_mark_mode)
-
-        top_layout.addWidget(self.mark_mode_label)
-        top_layout.addWidget(self.toggle_mark_button)
-
+        body = QWidget()
+        self.main_layout = QVBoxLayout(body)
+        self.main_layout.setContentsMargins(10, 8, 10, 6)
+        content_layout.addWidget(body, 1)
 
         self.model = EmployeeTableModel([])
         self.model.dataChanged.connect(self.on_model_data_changed)
@@ -183,7 +112,8 @@ class MainWindow(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
-        self.table.horizontalHeader().setStyleSheet("font-weight: normal;")
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setDefaultSectionSize(28)
 
         widths = [60, 140, 100, 80, 100, 140, 80, 140, 80, 140, 80, 140, 80, 140, 80, 285]
         for col, width in enumerate(widths):
@@ -216,14 +146,16 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.consolidation_view)
         self.main_layout.addWidget(self.stack)
 
-        legend = QHBoxLayout()
-        legend.setContentsMargins(5, 0, 5, 3)
+        # legenda kolorów wierszy – tylko w Planning
+        self.legend_widget = QWidget()
+        legend = QHBoxLayout(self.legend_widget)
+        legend.setContentsMargins(0, 4, 0, 0)
         for text, color in (("Ziek", ROW_COLOR_SICK), ("Naar Huis", ROW_COLOR_HOME), ("Late", ROW_COLOR_LATE)):
             chip = QLabel(f"  {text}  ")
-            chip.setStyleSheet(f"background-color: {color}; color: #000; border-radius: 3px; padding: 2px;")
+            chip.setStyleSheet(f"background-color: {color}; color: #000; border-radius: 4px; padding: 3px;")
             legend.addWidget(chip)
         legend.addStretch()
-        self.main_layout.addLayout(legend)
+        self.main_layout.addWidget(self.legend_widget)
 
         QShortcut(QKeySequence.Undo, self, activated=self.undo_last)
         for index in range(len(VIEWS)):  # Ctrl+1 / Ctrl+2 / Ctrl+3 = przełączenie widoku
@@ -265,12 +197,9 @@ class MainWindow(QMainWindow):
         self.refresh_data()
 
     def set_controls_enabled(self, enabled):
-        self.load_button.setEnabled(enabled)
-        self.clear_button.setEnabled(enabled)
-        self.add_emp_button.setEnabled(enabled)
-        self.remove_emp_button.setEnabled(enabled)
-        self.undo_button.setEnabled(enabled)
-        self.toggle_mark_button.setEnabled(enabled)
+        for control in (self.load_action, self.clear_action, self.add_emp_action, self.remove_emp_action,
+                        self.undo_button, self.toggle_mark_button):
+            control.setEnabled(enabled)
 
     def run_db_task(self, task, on_finished=None, refresh_after=False):
         self.set_controls_enabled(False)
@@ -410,7 +339,7 @@ class MainWindow(QMainWindow):
 
     def toggle_mark_mode(self):
         self.mark_mode = self.toggle_mark_button.isChecked()
-        self.mark_mode_label.setText("Mark Mode ON" if self.mark_mode else "Mark Mode OFF")
+        self.toggle_mark_button.setText("Mark mode: ON" if self.mark_mode else "Mark mode")
 
         self.table.setSelectionMode(
             QAbstractItemView.SingleSelection if self.mark_mode else QAbstractItemView.ExtendedSelection
@@ -454,44 +383,178 @@ class MainWindow(QMainWindow):
         self.run_db_task(lambda: db.toggle_employee_marked_in_db(emp_id, marked))
 
     # ------------------------------------------------------------------- views
+    def _themed(self, target, icon_name, **kwargs):
+        """Ustawia ikonę w kolorze motywu i zapamiętuje ją do odświeżenia przy zmianie motywu."""
+        target.setIcon(theme.icon(icon_name, **kwargs))
+        self._icon_targets.append((target, icon_name, kwargs))
+        return target
+
     def _build_sidebar(self):
-        """Menu po lewej: jeden duży przycisk na widok (kolejne widoki = kolejna pozycja w VIEWS)."""
+        """Menu po lewej: logo + jeden przycisk z ikoną na widok (kolejne widoki = kolejna pozycja w VIEWS)."""
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(150)
-        sidebar.setStyleSheet(
-            "#sidebar { background-color: #1f2a36; }"
-            "#sidebar QLabel { color: #d6e2ee; font-weight: bold; padding: 12px 10px 8px 10px; }"
-            "#sidebar QPushButton { color: #d6e2ee; background: transparent; border: none; text-align: left;"
-            " padding: 12px 14px; font-size: 14px; border-left: 4px solid transparent; }"
-            "#sidebar QPushButton:hover { background-color: #2c3b4b; }"
-            "#sidebar QPushButton:checked { background-color: #34495e; color: #ffffff;"
-            " border-left: 4px solid #00BCff; font-weight: bold; }"
-        )
+        sidebar.setFixedWidth(178)
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(QLabel("Planning Manager"))
+        layout.setContentsMargins(12, 14, 12, 12)
+        layout.setSpacing(4)
+
+        brand = QHBoxLayout()
+        logo = QLabel()
+        logo.setPixmap(QPixmap(theme.LOGO).scaled(34, 34, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        brand.addWidget(logo)
+        name = QLabel("Planning\nManager")
+        name.setObjectName("appName")
+        brand.addWidget(name, 1)
+        layout.addLayout(brand)
+        layout.addSpacing(18)
 
         self.view_buttons = []
         group = QButtonGroup(self)
         group.setExclusive(True)
         for index, (title, tooltip) in enumerate(VIEWS):
-            button = QPushButton(title)
+            button = QPushButton(f"  {title}")
             button.setCheckable(True)
             button.setCursor(Qt.PointingHandCursor)
+            button.setIconSize(QSize(22, 22))
             button.setToolTip(f"{tooltip}  (Ctrl+{index + 1})")
             button.clicked.connect(lambda _=False, i=index: self.show_view(i))
+            self._themed(button, VIEW_ICONS[index], color_key="sidebar_text")
             group.addButton(button, index)
             layout.addWidget(button)
             self.view_buttons.append(button)
         self.view_buttons[0].setChecked(True)
         layout.addStretch()
+
+        version = QLabel("offline · local database")
+        version.setObjectName("appVersion")
+        layout.addWidget(version)
         return sidebar
+
+    def _tool(self, icon_name, text, slot=None, tooltip=""):
+        button = QToolButton()
+        button.setObjectName("toolbarButton")
+        button.setText(text)
+        button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        button.setIconSize(QSize(20, 20))
+        button.setCursor(Qt.PointingHandCursor)
+        button.setToolTip(tooltip or text)
+        if slot is not None:
+            button.clicked.connect(slot)
+        return self._themed(button, icon_name)
+
+    def _menu_tool(self, icon_name, text, entries, tooltip=""):
+        """Przycisk z menu rozwijanym: entries = [(ikona, tekst, slot) albo None = separator]."""
+        button = self._tool(icon_name, f"{text}  ▾", tooltip=tooltip)
+        button.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(button)
+        actions = []
+        for entry in entries:
+            if entry is None:
+                menu.addSeparator()
+                continue
+            entry_icon, entry_text, slot = entry
+            action = menu.addAction(entry_text, slot)
+            self._themed(action, entry_icon)
+            actions.append(action)
+        button.setMenu(menu)
+        return button, actions
+
+    def _build_topbar(self):
+        """Pasek u góry: ikona i nazwa widoku, liczba osób, akcje z ikonami (rzadkie – w menu)."""
+        bar = QFrame()
+        bar.setObjectName("topbar")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(16, 8, 12, 8)
+        layout.setSpacing(4)
+
+        self.page_icon = QLabel()
+        layout.addWidget(self.page_icon)
+        self.page_title = QLabel(VIEWS[0][0])
+        self.page_title.setObjectName("pageTitle")
+        layout.addWidget(self.page_title)
+        layout.addSpacing(10)
+        self.count_label = QLabel("")
+        self.count_label.setObjectName("muted")
+        self.count_label.setToolTip("Employees on the list (shown / all)")
+        layout.addWidget(self.count_label)
+        layout.addStretch()
+
+        self.toggle_mark_button = self._tool(
+            "mark_mode", "Mark mode",
+            tooltip="Mark mode: click a row to tick it as written into the hours Excel.\n"
+                    "A tick disappears when the person gets a new department.")
+        self.toggle_mark_button.setCheckable(True)
+        self.toggle_mark_button.toggled.connect(self.toggle_mark_mode)
+        layout.addWidget(self.toggle_mark_button)
+
+        self.undo_button = self._tool("undo", "Undo", self.undo_last, "Undo the last change (Ctrl+Z)")
+        layout.addWidget(self.undo_button)
+        self.history_button = self._tool("history", "History", self.show_history, "Who changed what and when")
+        layout.addWidget(self.history_button)
+
+        self.import_button, (self.load_action, self.logins_action, self.import_cons_action) = self._menu_tool(
+            "import", "Import", [
+                ("planning", "Shift plan (Ploeglijst)…", self.load_excel),
+                ("logins", "Logins (Inlognamen)…", self.import_logins),
+                ("consolidation", "Consolidation list…", self.import_consolidation),
+            ], "Load data from Excel files")
+        layout.addWidget(self.import_button)
+
+        self.employees_button, (self.add_emp_action, self.remove_emp_action) = self._menu_tool(
+            "add_employee", "Employees", [
+                ("add_employee", "Add employee…", self.add_employee),
+                ("remove_employee", "Remove selected employee(s)", self.remove_employee),
+            ])
+        layout.addWidget(self.employees_button)
+
+        self.export_button, _ = self._menu_tool(
+            "export", "Export", [
+                ("export", "Export to Excel…", self.export_excel),
+                ("print", "Print…", self.print_table),
+            ])
+        layout.addWidget(self.export_button)
+
+        self.more_button, (self.theme_action, self.clear_action) = self._menu_tool(
+            "settings", "", [
+                ("settings", "Switch to light theme", self.toggle_theme),
+                None,
+                ("clear", "Clear data…", self.clear_data),
+            ], "More")
+        self.more_button.setText("")
+        self.more_button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        layout.addWidget(self.more_button)
+        self._update_theme_action()
+        self._update_page_header(0)
+        return bar
+
+    def _update_page_header(self, index):
+        self.page_title.setText(VIEWS[index][0])
+        self.page_icon.setPixmap(theme.tinted_pixmap(VIEW_ICONS[index], theme.color("accent"), 28))
+        planning = index == 0
+        self.toggle_mark_button.setVisible(planning)
+        if hasattr(self, "legend_widget"):
+            self.legend_widget.setVisible(planning)
+
+    def _update_theme_action(self):
+        dark = theme.current_name == "dark"
+        self.theme_action.setText("Switch to light theme" if dark else "Switch to dark theme")
+
+    def toggle_theme(self):
+        self.apply_theme("light" if theme.current_name == "dark" else "dark")
+
+    def apply_theme(self, name):
+        theme.apply(QApplication.instance(), name)
+        for target, icon_name, kwargs in self._icon_targets:
+            target.setIcon(theme.icon(icon_name, **kwargs))
+        self._update_theme_action()
+        self._update_page_header(self.stack.currentIndex())
+        self.monitoring_view.refresh_theme()
+        self.consolidation_view.refresh_theme()
 
     def show_view(self, index):
         self.stack.setCurrentIndex(index)
         self.view_buttons[index].setChecked(True)
+        self._update_page_header(index)
 
     # ----------------------------------------------------------- consolidation
     def _zones_changed(self, changes):
@@ -624,7 +687,7 @@ class MainWindow(QMainWindow):
     def update_count_label(self):
         shown = len(self.model.employees)
         total = len(self.model.all_employees)
-        self.count_label.setText(f"{shown} / {total}" if shown != total else f"{total}")
+        self.count_label.setText(f"{shown} / {total} employees" if shown != total else f"{total} employees")
 
     # -------------------------------------------------------------- undo / log
     def undo_last(self):

@@ -54,10 +54,18 @@ def test_main_window_builds(app, temp_db):
     assert window.model.rowCount() == 1
     assert len(window.visible_rows()[0]) == len(columns) - 1
 
-    assert window.count_label.text() == "1"
-    assert [b.text() for b in window.view_buttons] == ["Planning", "Monitoring", "Consolidatie"]
+    assert window.count_label.text() == "1 employees"
+    assert [b.text().strip() for b in window.view_buttons] == ["Planning", "Monitoring", "Consolidatie"]
     window.view_buttons[2].click()
     assert window.stack.currentWidget() is window.consolidation_view
+    assert window.page_title.text() == "Consolidatie" and window.toggle_mark_button.isHidden()
+
+    # zmiana motywu w locie (ikony i style odświeżone), powrót do poprzedniego
+    from pm import theme
+    before = theme.current_name
+    window.apply_theme("light")
+    assert theme.current_name == "light" and window.theme_action.text() == "Switch to dark theme"
+    window.apply_theme(before)
     window.close()
 
 

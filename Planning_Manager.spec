@@ -5,7 +5,7 @@ a = Analysis(
     ['planning_manager.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('pm/assets/icons', 'pm/assets/icons'), ('pm/assets/logo.png', 'pm/assets')],
     hiddenimports=['openpyxl'],
     hookspath=[],
     hooksconfig={},

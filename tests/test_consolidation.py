@@ -68,6 +68,21 @@ def test_assign_reacher_switches_zone_until_v(temp_db):
     assert db.update_consolidation_in_db(mixed_rit, done=True) == []
 
 
+def test_login_matches_longer_name_in_login_file(temp_db):
+    reacher = make_employee(lastname="Khalaf", firstname="Ahmad", department="Reachtruck")
+    db.toggle_position_in_db(reacher, "Noord")
+    _add_login("AHMAD-NICOLAE KHALAF", "180")
+    _add_login("Jan Kowalski", "201")
+    _add_login("Jan Maria Kowalski", "202")     # dwóch kandydatów -> bez zgadywania
+    other = make_employee(lastname="Kowalski", firstname="Jan Piotr")
+    assert _emp(reacher).login == "180"
+    assert _emp(other).login == "201"           # „Jan Kowalski" ⊂ „Jan Piotr Kowalski", jedyny taki
+
+    rit = db.add_consolidation_in_db(TODAY, "526036", amount=4, kantel=4)
+    db.update_consolidation_in_db(rit, reachers=["180"])
+    assert _emp(reacher).positions == [KC]      # login z RIT-u trafia do właściwej osoby
+
+
 def test_reacher_without_login_and_outside_reach(temp_db):
     reacher = make_employee(lastname="NoLogin", department="Reachtruck")
     picker = make_employee(lastname="Picker", department="Orderpicker")

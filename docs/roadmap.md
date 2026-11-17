@@ -49,11 +49,11 @@ Zasady:
 - [x] Środek tablicy mieści się na szerokość bez przewijania, a panel po prawej jest węższy.
 - [x] Instrukcje są pod małym „?" (okienko z opisem). Przycisk Sync Now znika.
 
-## Etap 2 – nowy wygląd
+## Etap 2 – nowy wygląd ✅ (podstawa zrobiona 17.11 – dalsze dopieszczanie wg uwag)
 
-- [ ] Własny, spójny motyw jasny i ciemny, niezależny od systemu, z czytelnym kontrastem (nie polegamy na samym kolorze).
-- [ ] Własne ikony. Robię listę promptów, użytkownik generuje arkusz w ChatGPT, a ja go tnę na pojedyncze ikony.
-- [ ] Pasek u góry z ikonkami i menu rozwijanymi (Import ▾, ⋯).
+- [x] Własny, spójny motyw jasny i ciemny, niezależny od systemu, z czytelnym kontrastem (nie polegamy na samym kolorze).
+- [x] Własne ikony. Robię listę promptów, użytkownik generuje arkusz w ChatGPT, a ja go tnę na pojedyncze ikony.
+- [x] Pasek u góry z ikonkami i menu rozwijanymi (Import ▾, ⋯).
 - Decyzja: zostajemy przy PySide6 (Qt). Wygląd zmieniamy stylem i ikonami.
 
 ## Etap 3 – fundament: wspólna baza na dysku sieciowym

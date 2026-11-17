@@ -44,6 +44,7 @@ from .config import (
     TEAM_LIST,
     hall_of,
 )
+from . import theme
 from .db import shift_start_minutes
 
 HELP_TEXT = """
@@ -74,10 +75,6 @@ CARD_HEIGHT = 22
 
 HALL_COLORS = {"North": "#1f6fb2", "South": "#c06a1b", "Both halls": "#4a5966"}
 
-ZONE_STYLE = ("DropZone { border: 1px solid #555; border-radius: 4px; }"
-              "DropZone QLabel#zoneTitle { font-weight: bold; }")
-ZONE_STYLE_HOVER = ("DropZone { border: 2px solid #00BCff; border-radius: 4px; }"
-                    "DropZone QLabel#zoneTitle { font-weight: bold; }")
 
 
 def login_tooltip(login):
@@ -114,12 +111,22 @@ def card_text(emp, show_department=False, show_leave=False):
     return text
 
 
-def section_header(text, color):
+def section_header(text, color, icon_name=None):
+    """Kolorowy nagłówek z białą ikoną i tekstem (czytelny także bez rozróżniania kolorów)."""
+    frame = QFrame()
+    frame.setStyleSheet(f"QFrame {{ background-color: {color}; border-radius: 6px; }}"
+                        "QLabel { color: #ffffff; font-weight: bold; background: transparent; }")
+    layout = QHBoxLayout(frame)
+    layout.setContentsMargins(8, 5, 8, 5)
+    layout.setSpacing(6)
+    if icon_name:
+        icon_label = QLabel()
+        icon_label.setPixmap(theme.white_icon(icon_name).pixmap(18, 18))
+        layout.addWidget(icon_label)
     label = QLabel(text)
-    label.setStyleSheet(
-        f"background-color: {color}; color: #fff; font-weight: bold; padding: 4px 8px; border-radius: 3px;"
-    )
-    return label
+    layout.addWidget(label, 1)
+    frame.label = label
+    return frame
 
 
 class EmployeeList(QListWidget):
@@ -248,7 +255,6 @@ class DropZone(QFrame):
         self.min_rows = min_rows
         self.show_leave = show_leave  # Ziek / Naar Huis: godzina wyjścia na karcie
 
-        self.setStyleSheet(ZONE_STYLE)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum if fit else QSizePolicy.Expanding)
 
         layout = QVBoxLayout(self)
@@ -269,12 +275,18 @@ class DropZone(QFrame):
         )
         self.list.action_requested.connect(lambda action, ids: self.action_requested.emit(action, ids, self.position))
         self.list.drag_state.connect(self.drag_state)
-        self.list.hover.connect(lambda on: self.setStyleSheet(ZONE_STYLE_HOVER if on else ZONE_STYLE))
+        self.list.hover.connect(self._set_hover)
         layout.addWidget(self.list)
         self._fit_height(0)
 
     def ids(self):
         return [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())]
+
+    def _set_hover(self, on):
+        """Podświetlenie ramki, gdy nad strefą jest przeciągana karta (kolor z motywu)."""
+        self.setProperty("hover", bool(on))
+        self.style().unpolish(self)
+        self.style().polish(self)
 
     def _fit_height(self, count):
         if self.fit:
@@ -312,17 +324,24 @@ class DropZone(QFrame):
 class Column(QFrame):
     """Kolumna tablicy (REACH / PICKING / INBOUND / OTHER): nagłówek + siatka stref."""
 
-    def __init__(self, title, zones, grid_columns, parent=None):
+    def __init__(self, title, zones, grid_columns, icon_name=None, parent=None):
         super().__init__(parent)
         self.title = title
         self.zones = zones
+        self.icon_name = icon_name
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(3)
+        layout.setSpacing(4)
 
+        header_row = QHBoxLayout()
+        header_row.setSpacing(6)
+        self.icon_label = QLabel()
+        header_row.addWidget(self.icon_label)
         self.header = QLabel(title)
-        self.header.setStyleSheet("font-weight: bold; font-size: 13px; padding: 2px;")
-        layout.addWidget(self.header)
+        self.header.setObjectName("columnHeader")
+        header_row.addWidget(self.header, 1)
+        layout.addLayout(header_row)
+        self.refresh_theme()
 
         grid = QGridLayout()
         grid.setSpacing(4)
@@ -333,6 +352,10 @@ class Column(QFrame):
         layout.addLayout(grid)
         layout.addStretch()
 
+    def refresh_theme(self):
+        if self.icon_name:
+            self.icon_label.setPixmap(theme.tinted_pixmap(self.icon_name, theme.color("muted"), 20))
+
     def update_count(self):
         people = {emp_id for zone in self.zones for emp_id in zone.ids()}
         self.header.setText(f"{self.title}  ({len(people)})")
@@ -342,23 +365,27 @@ class Column(QFrame):
 class HallSection(QFrame):
     """Hala (North / South / wspólne): zwijany nagłówek i kolumny obok siebie."""
 
-    def __init__(self, title, color, columns, stretches, parent=None):
+    def __init__(self, title, color, columns, stretches, icon_name=None, parent=None):
         super().__init__(parent)
         self.title = title
         self.columns = columns
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 6)
-        layout.setSpacing(3)
+        layout.setContentsMargins(0, 0, 0, 8)
+        layout.setSpacing(6)
 
         self.header = QPushButton()
         self.header.setCheckable(True)
         self.header.setChecked(True)
         self.header.setCursor(Qt.PointingHandCursor)
-        self.header.setStyleSheet(
-            f"QPushButton {{ background-color: {color}; color: #fff; font-weight: bold; font-size: 14px;"
-            " text-align: left; padding: 6px 10px; border: none; border-radius: 3px; }"
-        )
+        self.header.setToolTip("Click to fold / unfold")
+        if icon_name:
+            self.header.setIcon(theme.white_icon(icon_name))
+            self.header.setIconSize(QSize(20, 20))
+        style = (f"background-color: {color}; color: #ffffff; font-weight: bold; font-size: 11pt;"
+                 " text-align: left; padding: 7px 12px; border: none; border-radius: 7px;")
+        self.header.setStyleSheet(f"QPushButton {{ {style} }} QPushButton:checked {{ {style} }}"
+                                  f" QPushButton:hover {{ {style} border: 2px solid #ffffff; }}")
         self.header.toggled.connect(self._toggle)
         layout.addWidget(self.header)
 
@@ -413,43 +440,43 @@ class MonitoringView(QWidget):
         kpi_bar.setSpacing(6)
         for key in ("On shift", "Reach", "Picking", "Inbound", "Other", "Unassigned", "Ziek", "Naar Huis"):
             label = QLabel()
+            label.setObjectName("kpi")
             label.setAlignment(Qt.AlignCenter)
-            label.setStyleSheet(
-                "background-color: #2c3b4b; color: #e8eef4; border-radius: 4px; padding: 4px 10px;"
-            )
             self.kpi_labels[key] = label
             kpi_bar.addWidget(label)
         kpi_bar.addStretch()
 
-        self.from_start_button = QPushButton("⏮  From start of shift")
+        self.from_start_button = QPushButton("From start of shift")
         self.from_start_button.setCheckable(True)
         self.from_start_button.setCursor(Qt.PointingHandCursor)
+        self.from_start_button.setIconSize(QSize(18, 18))
         self.from_start_button.setToolTip(
             "ON: a drop changes the department from the START of the shift (for changes reported late).\n"
             f"Turns off by itself {FROM_START_WINDOW_MIN} minutes after the shift starts."
         )
         self.from_start_button.setStyleSheet(
-            "QPushButton { padding: 5px 12px; border-radius: 4px; }"
-            "QPushButton:checked { background-color: #e67e22; color: #000; font-weight: bold; }"
+            "QPushButton:checked { background-color: #e67e22; color: #000000; font-weight: bold;"
+            " border-color: #e67e22; }"
         )
         self.from_start_button.setMinimumWidth(self.from_start_button.fontMetrics().horizontalAdvance(
-            self.from_start_button.text()) + 40)
+            self.from_start_button.text()) + 60)
         self.from_start_button.toggled.connect(self._set_from_start)
         kpi_bar.addWidget(self.from_start_button)
 
-        help_button = QPushButton("?")
-        help_button.setFixedSize(30, 30)
-        help_button.setToolTip("How the board works")
-        help_button.setStyleSheet("QPushButton { border-radius: 15px; font-weight: bold; font-size: 15px; }")
-        help_button.clicked.connect(self.show_help)
-        kpi_bar.addWidget(help_button)
+        self.help_button = QPushButton()
+        self.help_button.setObjectName("helpButton")
+        self.help_button.setFixedSize(32, 32)
+        self.help_button.setIconSize(QSize(20, 20))
+        self.help_button.setToolTip("How the board works")
+        self.help_button.clicked.connect(self.show_help)
+        kpi_bar.addWidget(self.help_button)
         outer.addLayout(kpi_bar)
 
         # wyraźny pasek, gdy tryb „od początku zmiany" jest włączony (nie tylko kolor)
         self.from_start_banner = QLabel()
         self.from_start_banner.setStyleSheet(
-            "background-color: #e67e22; color: #000; font-weight: bold; font-size: 14px; padding: 6px 10px;"
-            " border-radius: 3px;"
+            "background-color: #e67e22; color: #000; font-weight: bold; font-size: 11pt; padding: 7px 12px;"
+            " border-radius: 7px;"
         )
         self.from_start_banner.setVisible(False)
         outer.addWidget(self.from_start_banner)
@@ -468,26 +495,31 @@ class MonitoringView(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         main.addWidget(scroll, 1)
         board = QWidget()
+        board.setObjectName("board")
         board_layout = QVBoxLayout(board)
-        board_layout.setContentsMargins(0, 0, 4, 0)
+        board_layout.setContentsMargins(0, 0, 6, 0)
         scroll.setWidget(board)
 
+        self.columns = []
         for hall in HALLS:
             columns = []
-            for dept, grid_columns in (("Reachtruck", 4), ("Orderpicker", 5)):
+            for dept, grid_columns, icon_name in (("Reachtruck", 4, "reach"), ("Orderpicker", 5, "picking")):
                 zones = [self._position_zone(dept, pos) for pos in SUB_POSITIONS[dept] if hall_of(dept, pos) == hall]
-                columns.append(Column(SUB_POSITION_TITLES[dept].upper(), zones, grid_columns))
-            self.halls[hall] = HallSection(hall, HALL_COLORS[hall], columns, (4, 5))
+                columns.append(Column(SUB_POSITION_TITLES[dept].upper(), zones, grid_columns, icon_name))
+            self.columns += columns
+            self.halls[hall] = HallSection(hall, HALL_COLORS[hall], columns, (4, 5),
+                                           "hall_north" if hall == "North" else "hall_south")
             board_layout.addWidget(self.halls[hall])
 
         inbound = [d for d in TEAM_LIST if d.startswith(INBOUND_PREFIX)]
         other = [d for d in TEAM_LIST
                  if d not in SUB_POSITIONS and d not in SIDE_DEPARTMENTS and d not in inbound]
         shared = [
-            Column("INBOUND", [self._department_zone(d) for d in inbound], 1),
-            Column("OTHER", [self._department_zone(d) for d in other], 6),
+            Column("INBOUND", [self._department_zone(d) for d in inbound], 1, "inbound"),
+            Column("OTHER", [self._department_zone(d) for d in other], 6, "other"),
         ]
-        self.halls["Both halls"] = HallSection("Both halls", HALL_COLORS["Both halls"], shared, (1, 6))
+        self.columns += shared
+        self.halls["Both halls"] = HallSection("Both halls", HALL_COLORS["Both halls"], shared, (1, 6), "other")
         board_layout.addWidget(self.halls["Both halls"])
         board_layout.addStretch()
 
@@ -499,23 +531,30 @@ class MonitoringView(QWidget):
         side_layout.setSpacing(6)
         main.addWidget(side)
 
-        header = section_header("UNASSIGNED", "#8e44ad")
+        header = section_header("UNASSIGNED", "#8e44ad", "unassigned")
         header.setToolTip("Reach without a zone · Picking without a client. Drag a card onto a zone.")
         side_layout.addWidget(header)
         self.unassigned = DropZone("Unassigned", "", "", accepts_drops=False, fit=False)
+        self.unassigned.title_label.setVisible(False)
         self._connect(self.unassigned)
         side_layout.addWidget(self.unassigned, 3)
 
-        for dept, color in (("Ziek", "#c0392b"), ("Naar Huis", "#5d6d7e")):
-            side_layout.addWidget(section_header(dept.upper(), color))
+        self.side_headers = {"Unassigned": header}
+        for dept, color, icon_name in (("Ziek", "#c0392b", "sick"), ("Naar Huis", "#5d6d7e", "home")):
+            header = section_header(dept.upper(), color, icon_name)
+            self.side_headers[dept] = header
+            side_layout.addWidget(header)
             zone = self._department_zone(dept, fit=False, show_leave=True)
             zone.title_label.setVisible(False)
             side_layout.addWidget(zone, 2)
             if dept == "Naar Huis":
-                group = QPushButton("Send a group home…")
-                group.setToolTip("Tick many people and set one clock-out time (e.g. the whole shift ends early)")
-                group.clicked.connect(self.group_home_requested)
-                side_layout.addWidget(group)
+                self.group_button = QPushButton("Send a group home…")
+                self.group_button.setIconSize(QSize(18, 18))
+                self.group_button.setToolTip(
+                    "Tick many people and set one clock-out time (e.g. the whole shift ends early)")
+                self.group_button.clicked.connect(self.group_home_requested)
+                side_layout.addWidget(self.group_button)
+        self.refresh_theme()
 
         # działy spoza listy (np. nietypowa nazwa z Excela) – tylko do wyciągania
         self.other_zone = DropZone(OTHER_ZONE, "", "", accepts_drops=False, fit=False)
@@ -557,6 +596,14 @@ class MonitoringView(QWidget):
 
     def _set_dragging(self, state):
         self.dragging = state
+
+    def refresh_theme(self):
+        """Ikony w kolorach bieżącego motywu (po zmianie jasny / ciemny)."""
+        self.from_start_button.setIcon(theme.icon("from_start", checked_key="black"))
+        self.help_button.setIcon(theme.icon("help"))
+        self.group_button.setIcon(theme.icon("bulk"))
+        for column in self.columns:
+            column.refresh_theme()
 
     # ------------------------------------------------- tryb „od początku zmiany"
     @property

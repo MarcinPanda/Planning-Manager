@@ -3,7 +3,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from . import db, splash
+from . import db, splash, theme
 from .main_window import MainWindow
 
 
@@ -14,6 +14,7 @@ def main():
 
     splash.step(3, "Building the window...")
     app = QApplication(sys.argv)
+    theme.apply(app)   # zapamiętany motyw (jasny / ciemny), ten sam wygląd na każdym komputerze
 
     main_window = MainWindow()
     main_window.showMaximized()

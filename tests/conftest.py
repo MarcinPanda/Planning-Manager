@@ -6,7 +6,9 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from pm import config, db  # noqa: E402
+from pm import config, db, theme  # noqa: E402
+
+theme.persist = False   # testy nie zmieniają zapisanego motywu użytkownika
 
 
 @pytest.fixture

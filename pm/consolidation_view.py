@@ -5,7 +5,7 @@ Przypisanie reachera do RIT-u (bez „V") daje mu na Monitoringu strefę Kantel/
 """
 from datetime import date
 
-from PySide6.QtCore import QTime, Qt, Signal
+from PySide6.QtCore import QSize, QTime, Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import theme
 from .config import CONSOLIDATION_DEPARTMENT, CONSOLIDATION_WORK_DEPARTMENT
 from .db import consolidation_zones, employee_token
 from .excel_io import parse_reachers
@@ -102,7 +103,10 @@ class ReacherDialog(QDialog):
 
         for token in current_tokens:
             if token not in shown:
-                self._add(token_label(token, by_token, login_names) + "   ·   not in Reach now", token, True)
+                emp = by_token.get(token)
+                where = (f"now on {emp.active_department}" if emp is not None
+                         else "not on today's plan (login only)")
+                self._add(token_label(token, by_token, login_names) + f"   ·   {where}", token, True)
                 shown.add(token)
 
         form = QFormLayout()
@@ -304,13 +308,16 @@ class ConsolidationView(QWidget):
         self.summary_label = QLabel("")
         bar.addWidget(self.summary_label)
         bar.addStretch()
-        help_button = QPushButton("?")
-        help_button.setFixedSize(30, 30)
-        help_button.setToolTip("How the consolidation list works")
-        help_button.setStyleSheet("QPushButton { border-radius: 15px; font-weight: bold; font-size: 15px; }")
-        help_button.clicked.connect(lambda: QMessageBox.information(self, "Consolidatie – how it works", HELP_TEXT))
-        bar.addWidget(help_button)
+        self.help_button = QPushButton()
+        self.help_button.setObjectName("helpButton")
+        self.help_button.setFixedSize(32, 32)
+        self.help_button.setIconSize(QSize(20, 20))
+        self.help_button.setToolTip("How the consolidation list works")
+        self.help_button.clicked.connect(
+            lambda: QMessageBox.information(self, "Consolidatie – how it works", HELP_TEXT))
+        bar.addWidget(self.help_button)
         layout.addLayout(bar)
+        self.refresh_theme()
 
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels(COLUMNS)
@@ -331,6 +338,11 @@ class ConsolidationView(QWidget):
             self.table.setColumnWidth(COL[name], width)
         header.setStretchLastSection(True)
         layout.addWidget(self.table)
+
+    def refresh_theme(self):
+        self.help_button.setIcon(theme.icon("help"))
+        self.import_button.setIcon(theme.icon("import"))
+        self.add_button.setIcon(theme.icon("consolidation"))
 
     # ------------------------------------------------------------------ dane
     @property
