@@ -73,13 +73,13 @@ ROW_COLOR_LATE = "#FFE2A8"
 # Monitoring: pozycje wewnątrz działu (klient / strefa). Dla godzin liczy się tylko dział.
 SUB_POSITIONS = {
     "Reachtruck": [
-        "Noord", "Replenish", "Na-Nomi", "Kantel/Consolidatie", "Extra",          # North
-        "Zuid", "Mars ITR", "Mars NL", "Pietercil", "Reflex", "Grenade", "Jordan",  # South
+        "Noord", "Replenish", "Na-Nomi", "Kantel/Consolidatie", "Extra",   # North
+        "Zuid", "Mars ITR", "Grenade", "Jordan", "Reflex",                 # South
     ],
     "Orderpicker": [
-        "Choco (12)", "Pladis (22)", "Riverside (21)", "Ferrero (27+28)", "Nutricia (10)",  # North
-        "Petfood (13)", "Alpro (23)", "Essity (14)", "Pietercil (15)", "Tlant (25)",
-        "Mars ITR (18 20)", "Mars GAM", "Grenade", "Jordan", "Reflex",               # South
+        "Choco (12)", "Pladis (22)", "Ferrero (27+28)", "Nutricia (10)", "Riverside (21)",  # North
+        "Alpro (23)", "Petfood (13)", "Essity (14)", "Pietercil (15)", "Tlant (25)",
+        "Mars GUM", "Mars ITR (18 20)", "Grenade", "Jordan", "Reflex",                       # South
     ],
 }
 SUB_POSITION_TITLES = {
@@ -91,8 +91,8 @@ SUB_POSITION_TITLES = {
 # wszystkie inne strefy Reach i Picking w North. Pozostałe działy są wspólne dla obu hal.
 HALLS = ("North", "South")
 SOUTH_POSITIONS = {
-    "Reachtruck": {"Zuid", "Mars ITR", "Mars NL", "Pietercil", "Reflex", "Grenade", "Jordan"},
-    "Orderpicker": {"Mars ITR (18 20)", "Mars GAM", "Grenade", "Jordan", "Reflex"},
+    "Reachtruck": {"Zuid", "Mars ITR", "Grenade", "Jordan", "Reflex"},
+    "Orderpicker": {"Mars GUM", "Mars ITR (18 20)", "Grenade", "Jordan", "Reflex"},
 }
 INBOUND_PREFIX = "Inbound"   # działy „Inbound 1..5" -> kolumna INBOUND
 
@@ -106,7 +106,11 @@ POSITION_RENAMES = {
     "Kantel": "Kantel/Consolidatie",
     "Consolidatie": "Kantel/Consolidatie",
     "ITR (18 20)": "Mars ITR (18 20)",
+    "Mars GAM": "Mars GUM",
 }
+
+# Tryb „od początku zmiany" wyłącza się sam po tylu minutach od startu zmiany
+FROM_START_WINDOW_MIN = 30
 
 # Działy z planu, które w aplikacji są strefą innego działu: nazwa (małe litery) -> (dział, strefa).
 # Godziny liczą się dla działu (Na-Nomi = Reach).

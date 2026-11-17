@@ -97,7 +97,7 @@ def test_view_groups_employees_into_zones(app, temp_db):
     assert view.unassigned.ids() == [b]          # Reach bez strefy
     assert view.zones["Naar Huis"].ids() == [c]
     assert view.other_zone.ids() != [] and not view.other_zone.isHidden()
-    assert pladis.list.item(0).text() == "Kowalski A."   # karta: nazwisko + inicjał (bez loginu)
+    assert pladis.list.item(0).text() == "Anna Kowalski"   # karta: imię i nazwisko (bez loginu)
 
     # kto poszedł do domu, tego nie da się przeciągnąć
     home_item = view.zones["Naar Huis"].list.item(0)
@@ -118,8 +118,28 @@ def test_view_groups_employees_into_zones(app, temp_db):
     ]
 
     # prawy klik -> zdjęcie ze strefy
-    pladis.list.remove_requested.emit([a])
+    pladis.list.action_requested.emit("remove", [a])
     assert toggled == [(a, "Pladis (22)")]
+
+    # upuszczenie na Naar Huis / Ziek i akcje z menu idą do okienek w głównym oknie
+    leave, actions = [], []
+    view.leave_requested.connect(lambda *args: leave.append(args))
+    view.action_requested.connect(lambda *args: actions.append(args))
+    view.zones["Naar Huis"].list.dropped.emit([a], "", False)
+    view.zones["Ziek"].list.dropped.emit([a], "", False)
+    pladis.list.action_requested.emit("zones", [a])
+    view.zones["Naar Huis"].list.action_requested.emit("time", [c])
+    assert leave == [([a], "home"), ([a], "sick")]
+    assert actions == [("zones", [a]), ("time", [c])]
+    assert view.zones["Naar Huis"].list.item(0).text().endswith("·  12:00")   # godzina wyjścia na karcie
+
+    # tryb „od początku zmiany": pasek widoczny, sam się wyłącza po terminie
+    view.from_start_button.setChecked(True)
+    assert view.from_start and not view.from_start_banner.isHidden()
+    from datetime import datetime, timedelta
+    view.from_start_deadline = datetime.now() - timedelta(seconds=1)
+    view._check_from_start()
+    assert not view.from_start and view.from_start_banner.isHidden()
 
     # liczniki
     assert view.kpi_labels["Picking"].text() == "Picking:  <b>1</b>"
@@ -228,7 +248,7 @@ def test_logins_import_and_matching(app, temp_db):
 
     view = MonitoringView()
     view.set_employees(db.load_employees_from_db())
-    assert view.zones["Laden"].list.item(0).text() == "007 – Dijk J."
+    assert view.zones["Laden"].list.item(0).text() == "007 – Jan van Dijk"
 
 
 def test_main_window_with_monitoring(app, temp_db):

@@ -3,6 +3,7 @@
 Każda operacja zmieniająca dane zapisuje wpis w tabeli change_log. Wpis może
 zawierać „migawkę" stanu sprzed zmiany (undo_data) – dzięki niej działa Cofnij.
 """
+import collections
 import getpass
 import glob
 import json
@@ -26,7 +27,7 @@ from .logic import (
 
 EMP_COLS = (
     "id, lastname, firstname, current_department, work_hours, shift, "
-    "computed_hours, marked, info, custom_breaks, late, position"
+    "computed_hours, marked, info, custom_breaks, late, position, planned_hours"
 )
 
 try:
@@ -76,6 +77,7 @@ def init_db():
         ("custom_breaks", "TEXT DEFAULT ''"),
         ("late", "INTEGER DEFAULT 0"),
         ("position", "TEXT DEFAULT ''"),
+        ("planned_hours", "TEXT DEFAULT ''"),   # godziny z planu przed skróceniem przez Naar Huis
     ):
         if name not in columns_db:
             cursor.execute(f"ALTER TABLE employees ADD COLUMN {name} {definition}")
@@ -344,6 +346,7 @@ def load_change_log(limit=500):
 
 def _employee_from_row(cursor, row):
     emp = Employee(*row[:9], custom_breaks=parse_breaks(row[9]), late=row[10], position=row[11])
+    emp.planned_hours = (row[12] if len(row) > 12 else "") or emp.work_hours
 
     cursor.execute("""
         SELECT department, time_assigned
@@ -498,19 +501,26 @@ def _validate_time_in_order(emp, time_chosen):
 
     start_min = to_minutes(start_str)
     end_min = to_minutes(end_str)
-    if end_min < start_min:
-        return  # zmiana przechodząca przez północ: nie sprawdzamy
+    if start_min == end_min:
+        raise ValueError(f"No working hours in the plan ({emp.work_hours}). Set the work hours first.")
+    overnight = end_min < start_min   # np. 15:00-00:00
+    if overnight:
+        end_min += 24 * 60
 
-    new_min = to_minutes(time_chosen)
+    def on_shift(minutes):
+        """Godzina po północy na zmianie nocnej liczy się jako „następny dzień"."""
+        return minutes + 24 * 60 if overnight and minutes < start_min else minutes
+
+    new_min = on_shift(to_minutes(time_chosen))
     previous = start_min
     for _, t in emp.dept_times:
         if t and Validator.validate_time_format(t):
-            previous = max(previous, to_minutes(t))
+            previous = max(previous, on_shift(to_minutes(t)))
 
     if new_min < previous:
         raise ValueError(
             f"Time {time_chosen} is earlier than the previous change "
-            f"({previous // 60:02d}:{previous % 60:02d})."
+            f"({previous % 1440 // 60:02d}:{previous % 60:02d})."
         )
     if new_min > end_min:
         raise ValueError(f"Time {time_chosen} is after the end of work ({end_str}).")
@@ -535,15 +545,16 @@ def _apply_add_department(cursor, emp, dept_chosen, time_chosen, position=""):
 
     if dept_chosen.lower() == "naar huis":
         # Świadoma decyzja: pójście do domu skraca godziny pracy.
+        # Godziny z planu zapamiętujemy, żeby dało się zmienić godzinę wyjścia albo wrócić do pracy.
         start = emp.original_work_hours.split("-")[0].strip()
         emp.work_hours = f"{start}-{time_chosen}"
 
     emp.recalc_intervals_and_hours()
     cursor.execute("""
         UPDATE employees
-        SET work_hours = ?, computed_hours = ?, marked = 0, position = ?
+        SET work_hours = ?, computed_hours = ?, marked = 0, position = ?, planned_hours = ?
         WHERE id = ?
-    """, (emp.work_hours, emp.computed_hours, position, emp_id))
+    """, (emp.work_hours, emp.computed_hours, position, emp.planned_hours, emp_id))
 
 
 def add_departments_to_db(employee_ids, dept_chosen, time_chosen):
@@ -664,13 +675,15 @@ def edit_departments_in_db(employee_ids, new_dept):
     conn.close()
 
 
-def move_employees_in_db(employee_ids, dept, position="", time_chosen=None, from_position="", add=False):
+def move_employees_in_db(employee_ids, dept, position="", time_chosen=None, from_position="", add=False,
+                         from_start=False):
     """Przeniesienie w widoku Monitoring (upuszczenie kostki na dział / pozycję).
 
     - ten sam dział, inna pozycja  -> zmienia się tylko pozycja (godziny bez zmian);
       add=True dokłada pozycję do już posiadanych (praca w kilku strefach naraz),
       inaczej pozycja from_position jest zamieniana na nową,
-    - przed początkiem pracy       -> zmienia się dział początkowy (jak Edit Department),
+    - przed początkiem pracy albo from_start=True (tryb „od początku zmiany")
+                                   -> zmienia się dział początkowy (jak Edit Department),
     - w trakcie pracy              -> nowy wpis działu od teraz (jak Add Department).
     Zwraca listę błędów.
     """
@@ -718,10 +731,16 @@ def move_employees_in_db(employee_ids, dept, position="", time_chosen=None, from
                 if Validator.validate_time_format(start_str) and Validator.validate_time_format(end_str):
                     start_min, end_min = to_minutes(start_str), to_minutes(end_str)
 
+            # przed początkiem zmiany (do 6 h wcześniej) – także dla zmiany przez północ
+            minutes_to_start = (start_min - now_min) % (24 * 60) if start_min is not None else None
             before_start = (
-                start_min is not None and end_min >= start_min and now_min < start_min
-                and len(emp.dept_times) == 1 and dept.lower() != "naar huis"
+                start_min is not None and start_min != end_min and 0 < minutes_to_start <= 6 * 60
+                and len(emp.dept_times) == 1 and dept.lower() not in ("naar huis", "ziek")
             )
+            if from_start:
+                if len(emp.dept_times) > 1:
+                    raise ValueError("already has changes during the shift – change it in Planning.")
+                before_start = True
 
             if before_start:
                 # Układanie obsady przed zmianą: podmieniamy dział początkowy.
@@ -749,6 +768,8 @@ def move_employees_in_db(employee_ids, dept, position="", time_chosen=None, from
         target = f"{dept} / {position}" if position else dept
         if add and position:
             target += " (added)"
+        if from_start:
+            target += " (from start of shift)"
         _record(
             cursor, "Move",
             f"-> {target} @ {time_chosen}: {_names(cursor, changed)}",
@@ -758,6 +779,209 @@ def move_employees_in_db(employee_ids, dept, position="", time_chosen=None, from
     conn.commit()
     conn.close()
     return errors
+
+
+LEAVE_DEPARTMENTS = {"home": "Naar Huis", "sick": "Ziek"}
+
+
+def _shift_bounds(emp):
+    """(start, koniec) z godzin z planu w minutach, koniec po północy jako +24 h; None gdy brak godzin."""
+    hours = emp.planned_hours or emp.work_hours
+    if not isinstance(hours, str) or "-" not in hours:
+        return None
+    start_str, end_str = (p.strip() for p in hours.split("-", 1))
+    if not (Validator.validate_time_format(start_str) and Validator.validate_time_format(end_str)):
+        return None
+    start, end = to_minutes(start_str), to_minutes(end_str)
+    if start == end:
+        return None
+    return start, end + 24 * 60 if end < start else end
+
+
+def _fmt(minutes):
+    minutes %= 24 * 60
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def leave_work_in_db(employee_ids, kind, time_chosen=None, all_day=False):
+    """Naar Huis (kind='home') albo Ziek (kind='sick') dla jednej lub wielu osób naraz.
+
+    - all_day=True: cały dzień nieobecny (chorobowe od rana / nie przyszedł) -> 0 h,
+      wcześniejsze zmiany działów tego dnia są usuwane,
+    - inaczej: od podanej godziny (godzina odbicia); godziny liczą się do niej.
+      Naar Huis skraca godziny pracy (jak dotąd), Ziek nie – po Ziek godziny i tak liczą się jako 0.
+    Godziny z planu zostają zapamiętane (planned_hours), żeby dało się zmienić godzinę albo cofnąć.
+    Zwraca listę błędów.
+    """
+    dept = LEAVE_DEPARTMENTS[kind]
+    if time_chosen is None:
+        time_chosen = datetime.now().strftime("%H:%M")
+    if not all_day and not Validator.validate_time_format(time_chosen):
+        raise ValueError("Invalid time format.")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    errors, changed = [], []
+    snapshot = _snapshot(cursor, employee_ids)
+
+    for emp_id in employee_ids:
+        emp = load_employee_by_id(cursor, emp_id)
+        if emp is None:
+            continue
+        label = f"{emp.lastname} {emp.firstname}"
+        try:
+            if emp.status in ("home", "sick"):
+                raise ValueError(f"is already on {emp.active_department} – use 'Change time' or 'Back to work'.")
+            if all_day:
+                # cały dzień: od początku zmiany Ziek / Naar Huis (zmiany działów z tego dnia znikają)
+                cursor.execute("DELETE FROM departments WHERE employee_id = ?", (emp_id,))
+                cursor.execute(
+                    "INSERT INTO departments (employee_id, department, time_assigned) VALUES (?, ?, '')",
+                    (emp_id, dept),
+                )
+                emp.dept_times = [(dept, "")]
+                emp.work_hours = emp.planned_hours
+                emp.current_department = dept
+                emp.recalc_intervals_and_hours()
+                cursor.execute("""
+                    UPDATE employees SET current_department = ?, work_hours = ?, computed_hours = ?,
+                        marked = 0, position = '', planned_hours = ?
+                    WHERE id = ?
+                """, (dept, emp.work_hours, emp.computed_hours, emp.planned_hours, emp_id))
+            else:
+                _apply_add_department(cursor, emp, dept, time_chosen, "")
+            changed.append(emp_id)
+        except ValueError as exc:
+            errors.append(f"{label}: {exc}")
+
+    if changed:
+        _sync_consolidation_zones(cursor)
+        when = "all day" if all_day else f"@ {time_chosen}"
+        _record(cursor, dept, f"{when}: {_names(cursor, changed)}",
+                restore=[s for s in snapshot if s["row"][0] in changed])
+    conn.commit()
+    conn.close()
+    return errors
+
+
+def change_leave_time_in_db(employee_ids, time_chosen):
+    """Zmiana godziny wyjścia (Naar Huis / Ziek) – np. na godzinę faktycznego odbicia. Zwraca błędy."""
+    if not Validator.validate_time_format(time_chosen):
+        raise ValueError("Invalid time format.")
+    conn = get_connection()
+    cursor = conn.cursor()
+    errors, changed = [], []
+    snapshot = _snapshot(cursor, employee_ids)
+
+    for emp_id in employee_ids:
+        emp = load_employee_by_id(cursor, emp_id)
+        if emp is None:
+            continue
+        label = f"{emp.lastname} {emp.firstname}"
+        try:
+            if emp.status not in ("home", "sick") or not emp.active_since:
+                raise ValueError("is not on Naar Huis / Ziek with a time (all-day absence has no time).")
+            bounds = _shift_bounds(emp)
+            if bounds is None:
+                raise ValueError("has no working hours in the plan.")
+            start, end = bounds
+            new = to_minutes(time_chosen)
+            if new < start:
+                new += 24 * 60
+            previous = start
+            for _, t in emp.dept_times[:-1]:
+                if t and Validator.validate_time_format(t):
+                    m = to_minutes(t)
+                    previous = max(previous, m + 24 * 60 if m < start else m)
+            if not previous <= new <= end:
+                raise ValueError(f"time must be between {_fmt(previous)} and {_fmt(end)}.")
+
+            last_id = cursor.execute(
+                "SELECT id FROM departments WHERE employee_id = ? ORDER BY id DESC LIMIT 1", (emp_id,)
+            ).fetchone()[0]
+            cursor.execute("UPDATE departments SET time_assigned = ? WHERE id = ?", (time_chosen, last_id))
+            emp.dept_times[-1] = (emp.dept_times[-1][0], time_chosen)
+            if emp.status == "home":
+                emp.work_hours = f"{_fmt(start)}-{time_chosen}"
+            emp.recalc_intervals_and_hours()
+            cursor.execute("UPDATE employees SET work_hours = ?, computed_hours = ? WHERE id = ?",
+                           (emp.work_hours, emp.computed_hours, emp_id))
+            changed.append(emp_id)
+        except ValueError as exc:
+            errors.append(f"{label}: {exc}")
+
+    if changed:
+        _record(cursor, "Leave time", f"-> {time_chosen}: {_names(cursor, changed)}",
+                restore=[s for s in snapshot if s["row"][0] in changed])
+    conn.commit()
+    conn.close()
+    return errors
+
+
+def back_to_work_in_db(employee_ids):
+    """Cofnięcie Naar Huis / Ziek (pomyłka albo wrócił): usuwa ostatni wpis, przywraca godziny z planu."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    errors, changed = [], []
+    snapshot = _snapshot(cursor, employee_ids)
+
+    for emp_id in employee_ids:
+        emp = load_employee_by_id(cursor, emp_id)
+        if emp is None:
+            continue
+        if emp.status not in ("home", "sick"):
+            continue
+        if len(emp.dept_times) == 1:
+            errors.append(f"{emp.lastname} {emp.firstname}: absent all day – use Undo or Edit Department.")
+            continue
+        last_id = cursor.execute(
+            "SELECT id FROM departments WHERE employee_id = ? ORDER BY id DESC LIMIT 1", (emp_id,)
+        ).fetchone()[0]
+        cursor.execute("DELETE FROM departments WHERE id = ?", (last_id,))
+        emp.dept_times.pop()
+        emp.work_hours = emp.planned_hours
+        emp.recalc_intervals_and_hours()
+        cursor.execute("UPDATE employees SET work_hours = ?, computed_hours = ? WHERE id = ?",
+                       (emp.work_hours, emp.computed_hours, emp_id))
+        changed.append(emp_id)
+
+    if changed:
+        _sync_consolidation_zones(cursor)
+        _record(cursor, "Back to work", _names(cursor, changed),
+                restore=[s for s in snapshot if s["row"][0] in changed])
+    conn.commit()
+    conn.close()
+    return errors
+
+
+def set_positions_in_db(emp_id, positions):
+    """Ustawia od razu wszystkie strefy / klientów osoby (kilka autoryzacji naraz). Godzin nie zmienia."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    emp = load_employee_by_id(cursor, emp_id)
+    if emp is None:
+        conn.close()
+        raise ValueError("Employee not found.")
+    new_value = join_positions(positions)
+    if new_value != (emp.position or ""):
+        _record(cursor, "Position", f"{emp.lastname} {emp.firstname}: {new_value.replace(';', ', ') or '-'}",
+                restore=_snapshot(cursor, [emp_id]))
+        cursor.execute("UPDATE employees SET position = ? WHERE id = ?", (new_value, emp_id))
+        _sync_consolidation_zones(cursor)
+    conn.commit()
+    conn.close()
+
+
+def shift_start_minutes(employees):
+    """Najczęstsza godzina startu w planie (= start zmiany), w minutach; None gdy brak."""
+    starts = collections.Counter()
+    for emp in employees:
+        hours = emp.planned_hours or emp.work_hours
+        if isinstance(hours, str) and "-" in hours:
+            start = hours.split("-", 1)[0].strip()
+            if Validator.validate_time_format(start) and hours.split("-", 1)[1].strip() != start:
+                starts[to_minutes(start)] += 1
+    return starts.most_common(1)[0][0] if starts else None
 
 
 def toggle_position_in_db(emp_id, position):

@@ -218,6 +218,7 @@ class Employee:
         self.current_department = current_department
         self.work_hours = work_hours
         self.original_work_hours = work_hours
+        self.planned_hours = work_hours  # godziny z planu (z bazy, gdy Naar Huis je skrócił)
         self.shift = shift
         self.computed_hours = str(computed_hours)
         self.marked = bool(marked)

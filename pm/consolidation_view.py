@@ -41,6 +41,21 @@ COL = {name: i for i, name in enumerate(COLUMNS)}
 EDITABLE_TEXT = {"Time": "time", "Area": "area", "Amount": "amount", "Kantel": "kantel", "Lane": "lane",
                  "Comment": "comment"}
 
+HELP_TEXT = """
+<h3>Consolidatie – the RIT list</h3>
+<p><b>Reacher</b> – click the cell and tick who drives this RIT. From that moment the reacher is on
+<b>Kantel/Consolidatie</b> on Monitoring.<br>
+<b>V</b> – tick when the reacher has driven the RIT in. When all their RITs have V, the reacher
+goes back to their previous zone.<br>
+<b>Done</b> – tick (X) when the consolidation is finished. Done RITs are hidden
+(untick <i>Hide done</i> to see them).<br>
+<b>Who was busy</b> – click and pick who did the consolidation (people on Consolidatie/Kantelen).<br>
+<b>Lane, Comment, Time, pallets</b> – double-click to edit.<br>
+Right-click a row: assign / remove reacher, delete RIT.</p>
+<p><b>Import Consolidatie</b> loads new RITs from the Excel file; it never overwrites what was
+entered here. The Excel file itself is not changed.</p>
+"""
+
 COLOR_DRIVEN = "#c8f0d4"     # V – zwiezione
 COLOR_DONE = "#d9d9d9"       # V + Done – wszystko zrobione
 COLOR_ASSIGNED = "#ffe9a8"   # reacher przypisany, jeszcze wozi
@@ -289,17 +304,13 @@ class ConsolidationView(QWidget):
         self.summary_label = QLabel("")
         bar.addWidget(self.summary_label)
         bar.addStretch()
+        help_button = QPushButton("?")
+        help_button.setFixedSize(30, 30)
+        help_button.setToolTip("How the consolidation list works")
+        help_button.setStyleSheet("QPushButton { border-radius: 15px; font-weight: bold; font-size: 15px; }")
+        help_button.clicked.connect(lambda: QMessageBox.information(self, "Consolidatie – how it works", HELP_TEXT))
+        bar.addWidget(help_button)
         layout.addLayout(bar)
-
-        hint = QLabel(
-            "Click the Reacher cell = assign reacher(s): they get the Kantel/Consolidatie zone on Monitoring  ·  "
-            "Tick V when the RIT is driven in = the reacher goes back to their previous zone  ·  "
-            "Done = consolidation finished  ·  Click Who was busy = pick from people on Consolidatie/Kantelen  ·  "
-            "Double-click Lane / Comment / Time / pallets to edit"
-        )
-        hint.setStyleSheet("color: #888;")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
 
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels(COLUMNS)

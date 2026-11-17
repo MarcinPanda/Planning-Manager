@@ -23,31 +23,31 @@ Zasady:
 - Baza jest fundamentem także dla innych aplikacji, np. tej do wydawania materiałów, która czyta loginy.
   Musi być uporządkowana, odporna na błędy i opisowa.
 
-## Etap 1 – tablica i poprawność godzin (start)
+## Etap 1 – tablica i poprawność godzin ✅ (zrobione 17.11 – do sprawdzenia w pracy)
 
-- [ ] **Błąd:** Naar Huis na zmianie popołudniowej daje 0 h. Powinny być godziny od 15:00 do godziny wyjścia.
-- [ ] Ziek i Naar Huis to prawdziwe miejsca. Osoba tam zostaje, a obok widać godzinę wyjścia jako tekst, nie tylko kolor.
-- [ ] Ziek ma dwa przypadki:
+- [x] **Błąd:** Naar Huis na zmianie popołudniowej daje 0 h. Powinny być godziny od 15:00 do godziny wyjścia.
+- [x] Ziek i Naar Huis to prawdziwe miejsca. Osoba tam zostaje, a obok widać godzinę wyjścia jako tekst, nie tylko kolor.
+- [x] Ziek ma dwa przypadki:
   - chorobowe od rana, czyli 0 h;
   - zachorował w trakcie zmiany, czyli godziny do momentu zgłoszenia.
-- [ ] Godzinę wyjścia (Naar Huis / Ziek) można wpisać i poprawić później. Liczy się godzina odbicia, a nie moment przeciągnięcia.
-- [ ] Masowe wysyłanie do domu: zaznaczam wiele osób, ustawiam jedną godzinę, a godziny przeliczają się od razu.
-- [ ] **Zmiany „od początku zmiany"**, gdy helpdesk dowiaduje się o nich z opóźnieniem. Propozycja:
+- [x] Godzinę wyjścia (Naar Huis / Ziek) można wpisać i poprawić później. Liczy się godzina odbicia, a nie moment przeciągnięcia.
+- [x] Masowe wysyłanie do domu: zaznaczam wiele osób, ustawiam jedną godzinę, a godziny przeliczają się od razu.
+- [x] **Zmiany „od początku zmiany"**, gdy helpdesk dowiaduje się o nich z opóźnieniem. Propozycja:
   - wyraźny przełącznik „Od początku zmiany / Od teraz" z kolorowym paskiem, gdy jest włączony;
-  - przełącznik sam się wyłącza po ustalonym czasie od startu zmiany (np. 1 h), żeby nikt o nim nie zapomniał;
+  - przełącznik sam się wyłącza 30 minut po starcie zmiany, żeby nikt o nim nie zapomniał;
   - przy przeciąganiu można też wpisać godzinę;
   - każdą godzinę działu można później poprawić.
-- [ ] Kilka stref i klientów naraz:
+- [x] Kilka stref i klientów naraz:
   - picking: od 1 do wszystkich autoryzacji;
   - reach: np. Na-Nomi + Replenish.
   - Prawy klik na karcie otwiera listę stref z ptaszkami. Karta pokazuje, że osoba ma więcej stref.
-- [ ] Strefy i ich kolejność:
-  - Picking North: Choco, Pladis, Ferrero, Nutricia, Riverside, Alpro, Petfood, Essity, **SET**, Pietercil, Tlant;
+- [x] Strefy i ich kolejność:
+  - Picking North: Choco, Pladis, Ferrero, Nutricia, Riverside, Alpro, Petfood, Essity, Pietercil, Tlant;
   - Picking South: Mars GUM, Mars ITR, Grenade, Jordan, Reflex;
   - Reach South: Zuid, Mars ITR, Grenade, Jordan, Reflex (bez Mars NL i Pietercil).
-- [ ] Karty z pełnym imieniem i nazwiskiem. Długie nazwy są skracane „…", a pełna nazwa jest w podpowiedzi.
-- [ ] Środek tablicy mieści się na szerokość bez przewijania, a panel po prawej jest węższy.
-- [ ] Instrukcje są pod małym „?" (okienko z opisem). Przycisk Sync Now znika.
+- [x] Karty z pełnym imieniem i nazwiskiem. Długie nazwy są skracane „…", a pełna nazwa jest w podpowiedzi.
+- [x] Środek tablicy mieści się na szerokość bez przewijania, a panel po prawej jest węższy.
+- [x] Instrukcje są pod małym „?" (okienko z opisem). Przycisk Sync Now znika.
 
 ## Etap 2 – nowy wygląd
 
@@ -91,4 +91,3 @@ Zasady:
 ## Otwarte pytania
 
 - Plik z godzinami: będzie jutro.
-- Jak długo po starcie zmiany helpdesk zwykle wprowadza zmiany „od początku" (do automatycznego wyłączenia przełącznika)?

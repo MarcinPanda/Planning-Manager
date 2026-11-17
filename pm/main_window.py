@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from PySide6.QtCore import (
+    QTime,
     QEasingCurve,
     QPropertyAnimation,
     Qt,
@@ -53,6 +54,7 @@ from .dialogs import (
 )
 from .consolidation_view import ConsolidationView
 from .monitoring import MonitoringView
+from .monitoring_dialogs import GroupHomeDialog, LeaveDialog, TimeDialog, ZonePickerDialog
 from .table_model import EmployeeTableModel
 from .widgets import DatabaseLoadWorker, DatabaseTaskWorker, InfoItemDelegate, MainThreadRelay, ToggleButton
 
@@ -170,11 +172,6 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.mark_mode_label)
         top_layout.addWidget(self.toggle_mark_button)
 
-        self.sync_button = QPushButton("Sync Now")
-        self.sync_button.setFixedWidth(100)
-        self.sync_button.setMinimumHeight(40)
-        self.sync_button.clicked.connect(self.sync_now)
-        top_layout.addWidget(self.sync_button)
 
         self.model = EmployeeTableModel([])
         self.model.dataChanged.connect(self.on_model_data_changed)
@@ -202,6 +199,9 @@ class MainWindow(QMainWindow):
         self.monitoring_view = MonitoringView()
         self.monitoring_view.move_requested.connect(self.move_employees)
         self.monitoring_view.toggle_position_requested.connect(self.toggle_position)
+        self.monitoring_view.leave_requested.connect(self.leave_work)
+        self.monitoring_view.action_requested.connect(self.monitoring_action)
+        self.monitoring_view.group_home_requested.connect(self.group_home)
 
         self.consolidation_view = ConsolidationView()
         self.consolidation_view.update_requested.connect(self.update_consolidation)
@@ -269,7 +269,6 @@ class MainWindow(QMainWindow):
         self.clear_button.setEnabled(enabled)
         self.add_emp_button.setEnabled(enabled)
         self.remove_emp_button.setEnabled(enabled)
-        self.sync_button.setEnabled(enabled)
         self.undo_button.setEnabled(enabled)
         self.toggle_mark_button.setEnabled(enabled)
 
@@ -555,26 +554,72 @@ class MainWindow(QMainWindow):
         """Kostka upuszczona w widoku Monitoring: zapis od razu, z aktualną godziną."""
         if not employee_ids:
             return
+        if department in ("Naar Huis", "Ziek"):
+            self.leave_work(employee_ids, "home" if department == "Naar Huis" else "sick")
+            return
 
-        if department.lower() == "naar huis":
-            reply = QMessageBox.question(
-                self, "Confirm",
-                f"Send {len(employee_ids)} employee(s) home now?\nThis shortens their work hours.",
-            )
-            if reply != QMessageBox.Yes:
-                return
-
-        def done(errors):
-            if errors:
-                QMessageBox.warning(self, "Warning", "\n".join(errors))
-
+        from_start = self.monitoring_view.from_start
         self.run_db_task(
             lambda: db.move_employees_in_db(
-                employee_ids, department, position, from_position=from_position, add=add
+                employee_ids, department, position, from_position=from_position, add=add, from_start=from_start
             ),
-            on_finished=done,
+            on_finished=self._show_errors,
             refresh_after=True,
         )
+
+    def _show_errors(self, errors):
+        if errors:
+            QMessageBox.warning(self, "Warning", "\n".join(errors))
+
+    def _employees_by_ids(self, employee_ids):
+        wanted = set(employee_ids)
+        return [e for e in self.model.all_employees if e.employee_id in wanted]
+
+    def leave_work(self, employee_ids, kind):
+        """Naar Huis / Ziek: okienko z godziną odbicia albo „cały dzień"."""
+        people = self._employees_by_ids(employee_ids)
+        if not people:
+            return
+        dialog = LeaveDialog(kind, [f"{e.firstname} {e.lastname}" for e in people],
+                             all_day_default=self.monitoring_view.from_start, parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        time_chosen, all_day = dialog.values()
+        self.run_db_task(
+            lambda: db.leave_work_in_db(employee_ids, kind, time_chosen, all_day=all_day),
+            on_finished=self._show_errors,
+            refresh_after=True,
+        )
+
+    def group_home(self):
+        dialog = GroupHomeDialog(self.model.all_employees, self)
+        if dialog.exec() != QDialog.Accepted or not dialog.selected_ids():
+            return
+        ids, time_chosen = dialog.selected_ids(), dialog.value()
+        self.run_db_task(lambda: db.leave_work_in_db(ids, "home", time_chosen),
+                         on_finished=self._show_errors, refresh_after=True)
+
+    def monitoring_action(self, action, employee_ids):
+        people = self._employees_by_ids(employee_ids)
+        if not people:
+            return
+        if action == "time":
+            current = QTime.fromString(people[0].active_since, "HH:mm")
+            dialog = TimeDialog("Change time", "New clock-out time (Naar Huis / Ziek) for: "
+                                + ", ".join(f"{e.firstname} {e.lastname}" for e in people),
+                                current if current.isValid() else None, self)
+            if dialog.exec() == QDialog.Accepted:
+                time_chosen = dialog.value()
+                self.run_db_task(lambda: db.change_leave_time_in_db(employee_ids, time_chosen),
+                                 on_finished=self._show_errors, refresh_after=True)
+        elif action == "back":
+            self.run_db_task(lambda: db.back_to_work_in_db(employee_ids),
+                             on_finished=self._show_errors, refresh_after=True)
+        elif action == "zones":
+            dialog = ZonePickerDialog(people[0], self)
+            if dialog.exec() == QDialog.Accepted:
+                positions, emp_id = dialog.positions(), people[0].employee_id
+                self.run_db_task(lambda: db.set_positions_in_db(emp_id, positions), refresh_after=True)
 
     def update_count_label(self):
         shown = len(self.model.employees)

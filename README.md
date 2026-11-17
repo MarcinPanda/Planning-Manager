@@ -80,9 +80,17 @@ Monitoring to „oczy steeringu": kto gdzie teraz jest i co robi.
   Który klient / strefa jest w South – `SOUTH_POSITIONS` w `pm/config.py`; reszta to North.
 - **Both halls**: INBOUND (Inbound 1–5) i OTHER (pozostałe działy).
 - Panel po prawej: **Unassigned** (Reach bez strefy, Picking bez klienta), Ziek, Naar Huis.
-- Pracownik to karta „login – Nazwisko I." (kolor: chory / do domu / spóźniony).
+- Pracownik to karta „login – Imię Nazwisko"; `[+2]` = pracuje jeszcze w 2 innych strefach.
 - Przeciągnięcie karty = zmiana działu lub strefy od teraz; **Ctrl + przeciągnięcie** = dołożenie
-  drugiej strefy; prawy klik = zdjęcie ze strefy; **Ctrl+Z** cofa. Dla godzin liczy się tylko dział.
+  drugiej strefy; prawy klik → *Zones / clients…* = kilka stref / klientów naraz (ptaszki);
+  prawy klik → *Remove from …* = zdjęcie ze strefy; **Ctrl+Z** cofa. Dla godzin liczy się tylko dział.
+- **Naar Huis / Ziek**: upuszczenie (albo prawy klik) otwiera okienko: godzina odbicia albo „cały dzień"
+  (nie przyszedł / chorobowe od rana = 0 h). Godziny liczą się do tej godziny. Karta zostaje w panelu
+  z godziną; prawy klik → *Change time…* / *Back to work*. *Send a group home…* = wiele osób, jedna godzina.
+  Godziny z planu są zapamiętane (`planned_hours`), więc zmiana godziny i powrót przywracają je poprawnie.
+- **⏮ From start of shift**: dla zmian zgłoszonych z opóźnieniem – przeciągnięcie zmienia dział od
+  początku zmiany. Pomarańczowy pasek, gdy włączony; wyłącza się sam 30 min po starcie zmiany.
+- Instrukcje pod przyciskiem **?**.
 - „Nanomi Reachtruck" z planu to Reach ze strefą Na-Nomi.
 - „Import Logins" wczytuje spis loginów z Excela (plik Inlognamen z kodami N012P / R012R albo kolumny `Login:` i `Name:`); loginy są
   dopasowywane po nazwisku i zostają w bazie na kolejne dni.

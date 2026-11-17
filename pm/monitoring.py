@@ -11,8 +11,9 @@ z Ctrl = dołożenie drugiej strefy. Widok niczego sam nie zapisuje – wysyła 
 a główne okno zapisuje w bazie (Ctrl+Z cofa).
 """
 import json
+from datetime import datetime, timedelta
 
-from PySide6.QtCore import QMimeData, QSize, Qt, Signal
+from PySide6.QtCore import QMimeData, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QDrag
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -31,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from .config import (
+    FROM_START_WINDOW_MIN,
     HALLS,
     INBOUND_PREFIX,
     ROW_COLOR_HOME,
@@ -41,6 +44,25 @@ from .config import (
     TEAM_LIST,
     hall_of,
 )
+from .db import shift_start_minutes
+
+HELP_TEXT = """
+<h3>Monitoring – who is where right now</h3>
+<p><b>Move someone:</b> drag their card onto another zone or department. The change counts
+<b>from now</b>.<br>
+<b>Several people:</b> Ctrl / Shift + click, then drag them together.<br>
+<b>Second zone / client at the same time:</b> hold <b>Ctrl</b> while dropping, or right-click →
+<i>Zones / clients…</i> and tick all of them. A card with <b>(+2)</b> works in 2 more zones.<br>
+<b>Remove from a zone:</b> right-click → <i>Remove from …</i>.</p>
+<p><b>Naar Huis / Ziek:</b> drop the card there (or right-click). Enter the <b>clock-out time</b>, or
+choose <i>whole day</i> if the person did not come. Hours count until that time.<br>
+Wrong time? Right-click the card → <i>Change time…</i>. Mistake? → <i>Back to work</i>.<br>
+<b>Whole shift ends early:</b> <i>Send a group home…</i> under Naar Huis.</p>
+<p><b>⏮ From start of shift:</b> for changes the helpdesk hears about late (e.g. someone was on
+another department since the start). While it is ON (orange bar), a drop changes the department
+from the start of the shift. It switches off by itself 30 minutes after the shift starts.</p>
+<p><b>Ctrl+Z</b> undoes the last change. Click a hall header to fold it.</p>
+"""
 
 MIME_TYPE = "application/x-planning-employee-ids"
 OTHER_ZONE = "Other / unknown"
@@ -78,12 +100,17 @@ def employee_tooltip(emp):
     )
 
 
-def card_text(emp, show_department=False):
-    """„003 – Kowalski J." (bez loginu: samo nazwisko)."""
-    name = emp.lastname + (f" {emp.firstname[:1]}." if emp.firstname else "")
+def card_text(emp, show_department=False, show_leave=False):
+    """„095 – Bruno Carvalho Azevedo" (+ ile jeszcze stref, godzina wyjścia przy Ziek / Naar Huis).
+    Za długi tekst lista skraca „…" na końcu; pełne dane są w podpowiedzi."""
+    name = f"{emp.firstname} {emp.lastname}".strip()
     text = f"{emp.login} – {name}" if emp.login else name
+    if show_leave:
+        text += f"   ·  {emp.active_since or 'all day'}"
     if show_department:
         text += f"   ·  {SUB_POSITION_TITLES.get(emp.active_department, emp.active_department)}"
+    elif emp.active_department in SUB_POSITIONS and len(emp.positions) > 1:
+        text = f"[+{len(emp.positions) - 1}] {text}"   # pracuje też w innych strefach (na początku – nie znika w „…")
     return text
 
 
@@ -99,7 +126,7 @@ class EmployeeList(QListWidget):
     """Lista kart w jednej strefie. Obsługuje przeciąganie i upuszczanie."""
 
     dropped = Signal(list, str, bool)   # id pracowników, pozycja źródłowa, czy z Ctrl (dołóż)
-    remove_requested = Signal(list)     # id pracowników do zdjęcia z tej strefy
+    action_requested = Signal(str, list)  # akcja z menu pod prawym klikiem, id pracowników
     drag_state = Signal(bool)
     hover = Signal(bool)
 
@@ -123,16 +150,28 @@ class EmployeeList(QListWidget):
 
     def _context_menu(self, pos):
         item = self.itemAt(pos)
-        if item is None or not self.zone_position:
+        if item is None:
             return
         if not item.isSelected():
             self.clearSelection()
             item.setSelected(True)
-        ids = self.selected_ids()
-        if not ids:
-            return
+        items = self.selectedItems() or [item]
+        ids = [i.data(Qt.UserRole) for i in items]
+        statuses = {i.data(Qt.UserRole + 1) for i in items}
+        has_zones = {i.data(Qt.UserRole + 2) for i in items}
+
         menu = QMenu(self)
-        menu.addAction(f"Remove from {self.zone_position}", lambda: self.remove_requested.emit(ids))
+        if statuses <= {"home", "sick"}:
+            menu.addAction("Change time…", lambda: self.action_requested.emit("time", ids))
+            menu.addAction("Back to work", lambda: self.action_requested.emit("back", ids))
+        else:
+            if len(ids) == 1 and True in has_zones:
+                menu.addAction("Zones / clients…", lambda: self.action_requested.emit("zones", ids))
+            if self.zone_position:
+                menu.addAction(f"Remove from {self.zone_position}", lambda: self.action_requested.emit("remove", ids))
+            menu.addSeparator()
+            menu.addAction("Naar Huis (going home)…", lambda: self.action_requested.emit("home", ids))
+            menu.addAction("Ziek (sick)…", lambda: self.action_requested.emit("sick", ids))
         menu.exec(self.viewport().mapToGlobal(pos))
 
     def startDrag(self, supported_actions):
@@ -196,16 +235,18 @@ class DropZone(QFrame):
     """Jedna strefa tablicy: dział albo strefa / klient wewnątrz działu, z kartami osób."""
 
     move_requested = Signal(list, str, str, str, bool)  # ids, dział, pozycja, pozycja źródłowa, dołóż
-    remove_requested = Signal(list, str)                # ids, pozycja
+    action_requested = Signal(str, list, str)           # akcja, ids, pozycja tej strefy
     drag_state = Signal(bool)
 
-    def __init__(self, title, department, position="", accepts_drops=True, fit=True, min_rows=1, parent=None):
+    def __init__(self, title, department, position="", accepts_drops=True, fit=True, min_rows=1,
+                 show_leave=False, parent=None):
         super().__init__(parent)
         self.title = title
         self.department = department
         self.position = position
         self.fit = fit            # True: wysokość dopasowana do liczby kart (bez przewijania)
         self.min_rows = min_rows
+        self.show_leave = show_leave  # Ziek / Naar Huis: godzina wyjścia na karcie
 
         self.setStyleSheet(ZONE_STYLE)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum if fit else QSizePolicy.Expanding)
@@ -217,6 +258,8 @@ class DropZone(QFrame):
         self.title_label = QLabel(title)
         self.title_label.setObjectName("zoneTitle")
         self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setWordWrap(True)   # długie nazwy (Kantel/Consolidatie) w dwóch liniach zamiast ucięcia
+        self.title_label.setMinimumWidth(10)
         layout.addWidget(self.title_label)
 
         self.list = EmployeeList(accepts_drops)
@@ -224,7 +267,7 @@ class DropZone(QFrame):
         self.list.dropped.connect(
             lambda ids, source, add: self.move_requested.emit(ids, self.department, self.position, source, add)
         )
-        self.list.remove_requested.connect(lambda ids: self.remove_requested.emit(ids, self.position))
+        self.list.action_requested.connect(lambda action, ids: self.action_requested.emit(action, ids, self.position))
         self.list.drag_state.connect(self.drag_state)
         self.list.hover.connect(lambda on: self.setStyleSheet(ZONE_STYLE_HOVER if on else ZONE_STYLE))
         layout.addWidget(self.list)
@@ -240,22 +283,29 @@ class DropZone(QFrame):
     def set_employees(self, employees, show_department=False):
         self.list.clear()
 
-        for emp in sorted(employees, key=lambda e: (e.lastname.casefold(), e.firstname.casefold())):
-            item = QListWidgetItem(card_text(emp, show_department))
+        if self.show_leave:
+            key = lambda e: (e.active_since or "", e.firstname.casefold(), e.lastname.casefold())  # noqa: E731
+        else:
+            key = lambda e: (e.firstname.casefold(), e.lastname.casefold())  # noqa: E731
+        for emp in sorted(employees, key=key):
+            item = QListWidgetItem(card_text(emp, show_department, self.show_leave))
             item.setSizeHint(QSize(10, CARD_HEIGHT))
             item.setData(Qt.UserRole, emp.employee_id)
+            item.setData(Qt.UserRole + 1, emp.status)
+            item.setData(Qt.UserRole + 2, emp.active_department in SUB_POSITIONS)
             item.setBackground(QBrush(QColor(STATUS_COLORS.get(emp.status, CHIP_COLOR))))
             item.setForeground(QBrush(QColor("#000000")))
             item.setToolTip(employee_tooltip(emp))
 
-            if emp.status == "home":
-                # kto poszedł do domu, tego już nie przenosimy
-                item.setFlags(item.flags() & ~Qt.ItemIsDragEnabled & ~Qt.ItemIsSelectable)
+            if emp.status in ("home", "sick"):
+                # z Ziek / Naar Huis nie przeciągamy – prawy klik: Change time / Back to work
+                item.setFlags(item.flags() & ~Qt.ItemIsDragEnabled)
 
             self.list.addItem(item)
 
         count = len(employees)
-        self.title_label.setText(f"{self.title}  ({count})" if count else self.title)
+        title = self.title.replace("/", "/​")   # miejsce na złamanie linii po „/"
+        self.title_label.setText(f"{title}  ({count})" if count else title)
         self._fit_height(count)
 
 
@@ -338,6 +388,9 @@ class MonitoringView(QWidget):
 
     move_requested = Signal(list, str, str, str, bool)
     toggle_position_requested = Signal(int, str)
+    leave_requested = Signal(list, str)          # ids, 'home' / 'sick' (upuszczenie albo menu)
+    action_requested = Signal(str, list)         # 'time' / 'back' / 'zones', ids
+    group_home_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -347,12 +400,14 @@ class MonitoringView(QWidget):
         self.zones = {}           # dział -> DropZone (działy bez stref, także Ziek / Naar Huis)
         self.position_zones = {}  # (dział, strefa) -> DropZone
         self.halls = {}
+        self.employees = []
+        self.from_start_deadline = None   # datetime: kiedy tryb „od początku zmiany" sam się wyłączy
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(4)
 
-        # ---- pasek liczników
+        # ---- pasek liczników + tryb „od początku zmiany" + pomoc
         self.kpi_labels = {}
         kpi_bar = QHBoxLayout()
         kpi_bar.setSpacing(6)
@@ -365,20 +420,52 @@ class MonitoringView(QWidget):
             self.kpi_labels[key] = label
             kpi_bar.addWidget(label)
         kpi_bar.addStretch()
-        hint = QLabel("Drag = move (from now)  ·  Ctrl + drag = add a 2nd zone  ·  "
-                      "Right-click = remove from zone  ·  Ctrl+Z = undo")
-        hint.setStyleSheet("color: #888;")
-        kpi_bar.addWidget(hint)
+
+        self.from_start_button = QPushButton("⏮  From start of shift")
+        self.from_start_button.setCheckable(True)
+        self.from_start_button.setCursor(Qt.PointingHandCursor)
+        self.from_start_button.setToolTip(
+            "ON: a drop changes the department from the START of the shift (for changes reported late).\n"
+            f"Turns off by itself {FROM_START_WINDOW_MIN} minutes after the shift starts."
+        )
+        self.from_start_button.setStyleSheet(
+            "QPushButton { padding: 5px 12px; border-radius: 4px; }"
+            "QPushButton:checked { background-color: #e67e22; color: #000; font-weight: bold; }"
+        )
+        self.from_start_button.setMinimumWidth(self.from_start_button.fontMetrics().horizontalAdvance(
+            self.from_start_button.text()) + 40)
+        self.from_start_button.toggled.connect(self._set_from_start)
+        kpi_bar.addWidget(self.from_start_button)
+
+        help_button = QPushButton("?")
+        help_button.setFixedSize(30, 30)
+        help_button.setToolTip("How the board works")
+        help_button.setStyleSheet("QPushButton { border-radius: 15px; font-weight: bold; font-size: 15px; }")
+        help_button.clicked.connect(self.show_help)
+        kpi_bar.addWidget(help_button)
         outer.addLayout(kpi_bar)
+
+        # wyraźny pasek, gdy tryb „od początku zmiany" jest włączony (nie tylko kolor)
+        self.from_start_banner = QLabel()
+        self.from_start_banner.setStyleSheet(
+            "background-color: #e67e22; color: #000; font-weight: bold; font-size: 14px; padding: 6px 10px;"
+            " border-radius: 3px;"
+        )
+        self.from_start_banner.setVisible(False)
+        outer.addWidget(self.from_start_banner)
+        self.from_start_timer = QTimer(self)
+        self.from_start_timer.timeout.connect(self._check_from_start)
+        self.from_start_timer.start(20_000)
 
         main = QHBoxLayout()
         main.setSpacing(6)
         outer.addLayout(main, 1)
 
-        # ---- tablica (przewijana)
+        # ---- tablica (przewijana tylko w pionie – szerokość zawsze mieści się w oknie)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         main.addWidget(scroll, 1)
         board = QWidget()
         board_layout = QVBoxLayout(board)
@@ -406,55 +493,103 @@ class MonitoringView(QWidget):
 
         # ---- panel po prawej
         side = QWidget()
-        side.setFixedWidth(250)
+        side.setFixedWidth(205)
         side_layout = QVBoxLayout(side)
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(6)
         main.addWidget(side)
 
-        side_layout.addWidget(section_header("UNASSIGNED", "#8e44ad"))
-        note = QLabel("Reach without zone · Picking without client.\nDrag a card onto a zone.")
-        note.setStyleSheet("color: #888;")
-        side_layout.addWidget(note)
+        header = section_header("UNASSIGNED", "#8e44ad")
+        header.setToolTip("Reach without a zone · Picking without a client. Drag a card onto a zone.")
+        side_layout.addWidget(header)
         self.unassigned = DropZone("Unassigned", "", "", accepts_drops=False, fit=False)
-        self.unassigned.drag_state.connect(self._set_dragging)
+        self._connect(self.unassigned)
         side_layout.addWidget(self.unassigned, 3)
 
-        for dept in SIDE_DEPARTMENTS:
-            zone = self._department_zone(dept, fit=False)
-            side_layout.addWidget(zone, 1)
+        for dept, color in (("Ziek", "#c0392b"), ("Naar Huis", "#5d6d7e")):
+            side_layout.addWidget(section_header(dept.upper(), color))
+            zone = self._department_zone(dept, fit=False, show_leave=True)
+            zone.title_label.setVisible(False)
+            side_layout.addWidget(zone, 2)
+            if dept == "Naar Huis":
+                group = QPushButton("Send a group home…")
+                group.setToolTip("Tick many people and set one clock-out time (e.g. the whole shift ends early)")
+                group.clicked.connect(self.group_home_requested)
+                side_layout.addWidget(group)
 
         # działy spoza listy (np. nietypowa nazwa z Excela) – tylko do wyciągania
         self.other_zone = DropZone(OTHER_ZONE, "", "", accepts_drops=False, fit=False)
-        self.other_zone.drag_state.connect(self._set_dragging)
+        self._connect(self.other_zone)
         side_layout.addWidget(self.other_zone, 1)
         self.other_zone.setVisible(False)
 
     # ------------------------------------------------------------- budowa
     def _connect(self, zone):
-        zone.move_requested.connect(self.move_requested)
-        zone.remove_requested.connect(self._remove_from_zone)
+        if zone.department in SIDE_DEPARTMENTS:
+            kind = "home" if zone.department == "Naar Huis" else "sick"
+            zone.move_requested.connect(lambda ids, *_: self.leave_requested.emit(ids, kind))
+        else:
+            zone.move_requested.connect(self.move_requested)
+        zone.action_requested.connect(self._on_action)
         zone.drag_state.connect(self._set_dragging)
         return zone
 
     def _position_zone(self, dept, position):
         zone = self._connect(DropZone(position, dept, position))
-        zone.setMinimumWidth(120)
+        zone.setMinimumWidth(60)
         self.position_zones[(dept, position)] = zone
         return zone
 
-    def _department_zone(self, dept, fit=True):
-        zone = self._connect(DropZone(dept, dept, "", fit=fit))
-        zone.setMinimumWidth(120)
+    def _department_zone(self, dept, fit=True, show_leave=False):
+        zone = self._connect(DropZone(dept, dept, "", fit=fit, show_leave=show_leave))
+        zone.setMinimumWidth(60)
         self.zones[dept] = zone
         return zone
 
-    def _remove_from_zone(self, ids, position):
-        for emp_id in ids:
-            self.toggle_position_requested.emit(emp_id, position)
+    def _on_action(self, action, ids, position):
+        if action == "remove":
+            for emp_id in ids:
+                self.toggle_position_requested.emit(emp_id, position)
+        elif action in ("home", "sick"):
+            self.leave_requested.emit(ids, action)
+        else:
+            self.action_requested.emit(action, ids)
 
     def _set_dragging(self, state):
         self.dragging = state
+
+    # ------------------------------------------------- tryb „od początku zmiany"
+    @property
+    def from_start(self):
+        return self.from_start_button.isChecked()
+
+    def _set_from_start(self, on):
+        if on:
+            now = datetime.now()
+            start = shift_start_minutes(self.employees)
+            deadline = None
+            if start is not None:
+                deadline = now.replace(hour=start // 60, minute=start % 60, second=0, microsecond=0)
+                if deadline - now > timedelta(hours=12):      # start zmiany był wczoraj
+                    deadline -= timedelta(days=1)
+                deadline += timedelta(minutes=FROM_START_WINDOW_MIN)
+            if deadline is None or deadline <= now:
+                deadline = now + timedelta(minutes=10)         # włączony później: działa jeszcze 10 min
+            self.from_start_deadline = deadline
+            self.from_start_banner.setText(
+                "⏮  FROM START OF SHIFT is ON – a drop changes the department from the start of the shift.  "
+                f"Turns off automatically at {deadline:%H:%M}."
+            )
+        else:
+            self.from_start_deadline = None
+        self.from_start_banner.setVisible(on)
+
+    def _check_from_start(self):
+        if self.from_start and self.from_start_deadline and datetime.now() >= self.from_start_deadline:
+            self.from_start_button.setChecked(False)
+
+    def show_help(self):
+        QMessageBox.information(self, "Monitoring – how it works", HELP_TEXT)
 
     # --------------------------------------------------------------- dane
     def set_employees(self, employees, force=False):
@@ -469,6 +604,7 @@ class MonitoringView(QWidget):
         if self.dragging:
             return  # nie przebudowujemy w trakcie przeciągania; zrobi to następne odświeżenie
         self._signature = signature
+        self.employees = list(employees)
 
         in_positions = {key: [] for key in self.position_zones}
         in_zones = {dept: [] for dept in self.zones}
