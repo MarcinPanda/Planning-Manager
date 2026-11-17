@@ -153,6 +153,9 @@ def test_section_header_and_cleanup():
     assert normalize_department("Picking / Orderpicker") == "Orderpicker"
     assert normalize_department("Stock-Controle") == "Stock Control"
     assert normalize_department("Something New") == "Something New"
+    assert normalize_department("Overig") == "Extra"
+    assert normalize_department("Rangeren") == "Pendel"
+    assert normalize_department("Inleren Orderpicker") == "Inleren Orderpicker"
     assert normalize_hours("06:00-15:00 ") == "06:00-15:00"
     assert normalize_hours("6:00 - 15:00") == "06:00-15:00"
 

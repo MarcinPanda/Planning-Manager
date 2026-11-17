@@ -16,7 +16,7 @@ TEAM_LIST = [
     "Laco", "Laden", "Logistiek coördinator", "Naar Huis", "Opleiding", "Orderpicker", "Pendel", "Project", "Reachtruck", "Reflex",
     "Retouren", "Shiftleader", "Schoonmaak", "Stock Control", "Sturing", "Teamleader", "VAL", "Ziek",
     # działy, które występują w planie z Excela
-    "Inleren Reachtruck", "Stuwarooij/Omstapelen",
+    "Inleren Orderpicker", "Inleren Reachtruck", "Stuwarooij/Omstapelen",
 ]
 TEAM_LIST.sort(key=lambda x: x.lower())
 
@@ -100,4 +100,8 @@ DEPARTMENT_ALIASES = {
     "transport coordinator": "Laco",
     "bufferzone": "Buffer",
     "stock controle": "Stock Control",
+    "overig": "Extra",
+    "rangeren": "Pendel",
+    "inleren orderpick": "Inleren Orderpicker",
+    "inleren picking": "Inleren Orderpicker",
 }
