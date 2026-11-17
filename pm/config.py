@@ -14,7 +14,9 @@ TEAM_LIST = [
     "Accu", "Ass TL", "Buffer", "Consolidatie/Kantelen", "Controle", "Cycle Count", "Emballage", "Extra",
     "Fixing Pallets", "Helpdesk", "Inbound 1", "Inbound 2", "Inbound 3", "Inbound 4", "Inbound 5", "Klusje/Racking",
     "Laco", "Laden", "Logistiek coördinator", "Naar Huis", "Opleiding", "Orderpicker", "Pendel", "Project", "Reachtruck", "Reflex",
-    "Retouren", "Shiftleader", "Schoonmaak", "Stock Control", "Sturing", "Teamleader", "VAL", "Ziek"
+    "Retouren", "Shiftleader", "Schoonmaak", "Stock Control", "Sturing", "Teamleader", "VAL", "Ziek",
+    # działy, które występują w planie z Excela
+    "Inleren Reachtruck", "Nanomi Reachtruck", "Stuwarooij/Omstapelen",
 ]
 TEAM_LIST.sort(key=lambda x: x.lower())
 
@@ -78,3 +80,12 @@ SUB_POSITIONS = {
 }
 SUB_POSITION_TITLES = {"Orderpicker": "Piking", "Reachtruck": "Reach Outbound"}
 MONITORING_GRID_COLUMNS = 8
+
+# Nazwy działów z planu w Excelu -> nazwy w aplikacji (klucze małymi literami)
+DEPARTMENT_ALIASES = {
+    "consolidatie": "Consolidatie/Kantelen",
+    "transport coördinator": "Laco",
+    "transport coordinator": "Laco",
+    "bufferzone": "Buffer",
+    "stock controle": "Stock Control",
+}

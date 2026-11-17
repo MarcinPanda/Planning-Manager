@@ -812,7 +812,7 @@ def mark_employees_late_in_db(items):
 def import_excel_to_db(filepaths):
     """Zwraca (zaimportowane, pominięte duplikaty). Wszystko albo nic."""
     if not filepaths:
-        return 0, 0
+        return 0, 0, []
 
     employees_df = read_planning_excel(filepaths)
 
@@ -875,4 +875,5 @@ def import_excel_to_db(filepaths):
     finally:
         conn.close()
 
-    return count, skipped
+    unknown = sorted(set(employees_df["current_department"]) - set(config.TEAM_LIST))
+    return count, skipped, unknown

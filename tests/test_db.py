@@ -128,14 +128,33 @@ def test_import_skips_duplicates(temp_db):
     plan = str(temp_db / "plan.xlsx")
     _write_plan(plan)
 
-    assert db.import_excel_to_db([plan]) == (2, 0)
-    assert db.import_excel_to_db([plan]) == (0, 2)
+    assert db.import_excel_to_db([plan]) == (2, 0, [])
+    assert db.import_excel_to_db([plan]) == (0, 2, [])
 
     names = sorted((e.lastname, e.firstname) for e in db.load_employees_from_db())
     assert names == [("Dijk", "Piet van"), ("Kowalski", "Jan")]
 
     db.undo_last()  # cofnięcie importu usuwa zaimportowane osoby
     assert db.load_employees_from_db() == []
+
+
+def test_section_header_and_cleanup():
+    from pm.excel_io import normalize_department, normalize_hours, parse_section_header
+
+    assert parse_section_header(" / Warehouse 1 / Ochtend / Ass TL/ Week47") == ("Ochtend", "Ass TL")
+    assert parse_section_header(" / Warehouse 1 / Middag / Stuwarooij/Omstapelen/ Week47") == (
+        "Middag", "Stuwarooij/Omstapelen")
+    assert normalize_department("Bufferzone") == "Buffer"
+    assert normalize_department("Stock Controle") == "Stock Control"
+    assert normalize_department("Consolidatie") == "Consolidatie/Kantelen"
+    assert normalize_department("orderpicker") == "Orderpicker"
+    assert normalize_department("Nanomi  Reachtruck") == "Nanomi Reachtruck"
+    assert normalize_department("Orderpicker/Picking") == "Orderpicker"
+    assert normalize_department("Picking / Orderpicker") == "Orderpicker"
+    assert normalize_department("Stock-Controle") == "Stock Control"
+    assert normalize_department("Something New") == "Something New"
+    assert normalize_hours("06:00-15:00 ") == "06:00-15:00"
+    assert normalize_hours("6:00 - 15:00") == "06:00-15:00"
 
 
 def test_old_database_is_migrated(temp_db):

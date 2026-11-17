@@ -111,6 +111,28 @@ class DatabaseLoadWorker(QObject):
             self.error.emit(str(exc))
 
 
+class MainThreadRelay(QObject):
+    """Odbiera wynik z wątku roboczego i wywołuje funkcje zwrotne w GŁÓWNYM wątku.
+
+    Sygnał podłączony do zwykłej funkcji Pythona (np. lambdy) wykonuje się w wątku,
+    który go wysłał. Okna (np. QMessageBox) utworzone w wątku roboczym zawieszają
+    aplikację. Ten obiekt żyje w głównym wątku, więc Qt kolejkuje wywołania do niego.
+    """
+
+    def __init__(self, on_finished, on_error, parent=None):
+        super().__init__(parent)
+        self._on_finished = on_finished
+        self._on_error = on_error
+
+    @Slot(object)
+    def finished(self, result):
+        self._on_finished(result)
+
+    @Slot(str)
+    def error(self, message):
+        self._on_error(message)
+
+
 class DatabaseTaskWorker(QObject):
     finished = Signal(object)
     error = Signal(str)

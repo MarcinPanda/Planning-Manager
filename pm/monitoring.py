@@ -164,7 +164,7 @@ class DropZone(QFrame):
         self.list.hover.connect(lambda on: self.setStyleSheet(ZONE_STYLE_HOVER if on else ZONE_STYLE))
         layout.addWidget(self.list)
 
-    def set_employees(self, employees):
+    def set_employees(self, employees, show_department=False):
         self.list.clear()
 
         for emp in sorted(employees, key=lambda e: (e.firstname.casefold(), e.lastname.casefold())):
@@ -172,6 +172,7 @@ class DropZone(QFrame):
             text = (
                 f"{emp.firstname} {emp.lastname}"
                 + (f"  [{emp.login}]" if emp.login else "")
+                + (f"  –  {emp.active_department}" if show_department else "")
                 + (f"  ·  {since}" if since else "")
             )
 
@@ -339,5 +340,5 @@ class MonitoringView(QWidget):
 
         for key, zone in self.zones.items():
             zone.set_employees(groups[key])
-        self.other_zone.set_employees(other)
+        self.other_zone.set_employees(other, show_department=True)
         self.other_zone.setVisible(bool(other))

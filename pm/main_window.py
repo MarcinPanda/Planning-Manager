@@ -51,7 +51,7 @@ from .dialogs import (
 )
 from .monitoring import MonitoringView
 from .table_model import EmployeeTableModel
-from .widgets import DatabaseLoadWorker, DatabaseTaskWorker, InfoItemDelegate, ToggleButton
+from .widgets import DatabaseLoadWorker, DatabaseTaskWorker, InfoItemDelegate, MainThreadRelay, ToggleButton
 
 
 class MainWindow(QMainWindow):
@@ -277,26 +277,28 @@ class MainWindow(QMainWindow):
                 for t, w in self._active_threads
                 if t is not thread
             ]
+            relay.deleteLater()
             thread.deleteLater()
 
         def finished_handler(result):
-            if on_finished:
-                on_finished(result)
+            thread.quit()
 
             if refresh_after:
                 self.refresh_data()
             else:
                 self.set_controls_enabled(True)
 
-            thread.quit()
+            if on_finished:
+                on_finished(result)
 
         def error_handler(message):
+            thread.quit()
             self.set_controls_enabled(True)
             QMessageBox.critical(self, "Database Error", message)
-            thread.quit()
 
-        worker.finished.connect(finished_handler)
-        worker.error.connect(error_handler)
+        relay = MainThreadRelay(finished_handler, error_handler, self)
+        worker.finished.connect(relay.finished, Qt.QueuedConnection)
+        worker.error.connect(relay.error, Qt.QueuedConnection)
         worker.finished.connect(worker.deleteLater)
         worker.error.connect(worker.deleteLater)
         thread.finished.connect(cleanup)
@@ -326,6 +328,7 @@ class MainWindow(QMainWindow):
                 for t, w in self._active_threads
                 if t is not thread
             ]
+            relay.deleteLater()
             thread.deleteLater()
 
         def on_finished(data):
@@ -339,12 +342,13 @@ class MainWindow(QMainWindow):
             thread.quit()
 
         def on_error(message):
+            thread.quit()
             self.set_controls_enabled(True)
             QMessageBox.critical(self, "Database Error", message)
-            thread.quit()
 
-        worker.finished.connect(on_finished)
-        worker.error.connect(on_error)
+        relay = MainThreadRelay(on_finished, on_error, self)
+        worker.finished.connect(relay.finished, Qt.QueuedConnection)
+        worker.error.connect(relay.error, Qt.QueuedConnection)
         worker.finished.connect(worker.deleteLater)
         worker.error.connect(worker.deleteLater)
         thread.finished.connect(cleanup)
@@ -741,10 +745,17 @@ class MainWindow(QMainWindow):
         filepaths = dlg.selectedFiles()
 
         def done(result):
-            count, skipped = result
+            count, skipped, unknown = result
             msg = f"Data imported successfully. Imported rows: {count}"
             if skipped:
                 msg += f"\nSkipped duplicates (already in the database): {skipped}"
+            if unknown:
+                msg += (
+                    "\n\nDepartments not on the department list "
+                    "(shown under 'Other / unknown' in Monitoring):\n- " + "\n- ".join(unknown)
+                )
+                QMessageBox.warning(self, "Imported with warnings", msg)
+                return
             QMessageBox.information(self, "Success", msg)
 
         self.run_db_task(

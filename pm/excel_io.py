@@ -1,6 +1,6 @@
 """Odczyt planu z plików Excel i eksport tabeli do Excela."""
 
-from .config import DEPARTMENT_OVERRIDES, SPECIAL_FUNCTIONS, col_names
+from .config import DEPARTMENT_ALIASES, DEPARTMENT_OVERRIDES, SPECIAL_FUNCTIONS, TEAM_LIST, col_names
 from .logic import (
     adjust_work_hours,
     compute_hours_with_breaks,
@@ -13,6 +13,66 @@ def _pd():
     """pandas jest ciężki – ładujemy go dopiero, gdy naprawdę jest potrzebny (szybszy start)."""
     import pandas
     return pandas
+
+
+def parse_section_header(text):
+    """' / Warehouse 1 / Ochtend / Stuwarooij/Omstapelen/ Week47' -> ('Ochtend', 'Stuwarooij/Omstapelen').
+    Dział to wszystko między zmianą a końcowym 'WeekNN' (może zawierać '/')."""
+    parts = [p.strip() for p in text.split("/") if p.strip()]
+    if parts and parts[-1].lower().startswith("week"):
+        parts = parts[:-1]
+
+    shift = parts[1] if len(parts) >= 2 and parts[1] in ("Ochtend", "Middag", "Day8to17") else None
+    department = "/".join(parts[2:]) if len(parts) >= 3 else None
+    return shift, department
+
+
+def _loose(text):
+    """Porównanie „na luzie": bez wielkości liter, spacji i znaków interpunkcyjnych."""
+    return "".join(ch for ch in str(text).casefold() if ch.isalnum())
+
+
+def normalize_department(name):
+    """Ujednolica nazwę działu z Excela z listą działów aplikacji.
+
+    Kolejność: alias -> dokładna nazwa z listy -> nazwa bez spacji/znaków ->
+    dla nazw z '/' (np. 'Orderpicker/Picking') pierwsza część, która pasuje.
+    Gdy nic nie pasuje, zwraca nazwę z Excela (osoba trafi na tablicy do 'Other').
+    """
+    name = " ".join(str(name).split())
+    loose_aliases = {_loose(k): v for k, v in DEPARTMENT_ALIASES.items()}
+    loose_teams = {_loose(t): t for t in TEAM_LIST}
+
+    alias = DEPARTMENT_ALIASES.get(name.lower()) or loose_aliases.get(_loose(name))
+    if alias:
+        return alias
+    if _loose(name) in loose_teams:
+        return loose_teams[_loose(name)]
+
+    if "/" in name:
+        for part in name.split("/"):
+            part = part.strip()
+            match = DEPARTMENT_ALIASES.get(part.lower()) or loose_aliases.get(_loose(part)) \
+                or loose_teams.get(_loose(part))
+            if match:
+                return match
+    return name
+
+
+def normalize_hours(value):
+    """'06:00-15:00 ' / '6:00 - 15:00' -> '06:00-15:00'; inne wartości bez zmian."""
+    if not isinstance(value, str) or "-" not in value:
+        return value
+    start, end = (p.strip() for p in value.split("-", 1))
+
+    def fix(t):
+        if ":" in t:
+            hh, mm = t.split(":", 1)
+            if hh.isdigit() and mm.isdigit():
+                return f"{int(hh):02d}:{int(mm):02d}"
+        return t
+
+    return f"{fix(start)}-{fix(end)}"
 
 
 def read_planning_excel(filepaths):
@@ -37,17 +97,7 @@ def read_planning_excel(filepaths):
 
             val_b = row[1] if len(row) > 1 else None
             if isinstance(val_b, str) and "Warehouse" in val_b and "Week" in val_b:
-                parts = [p.strip() for p in val_b.split("/") if p.strip()]
-
-                if len(parts) >= 2:
-                    shift_candidate = parts[1]
-                    current_shift = shift_candidate if shift_candidate in ["Ochtend", "Middag", "Day8to17"] else None
-
-                if len(parts) >= 3:
-                    current_department = parts[2]
-                else:
-                    current_department = None
-
+                current_shift, current_department = parse_section_header(val_b)
                 continue
 
             val_d = row[lastname_col] if len(row) > lastname_col else None
@@ -59,13 +109,8 @@ def read_planning_excel(filepaths):
                 continue
 
             if isinstance(val_d, str) and val_d.strip() and isinstance(val_e, str) and val_e.strip():
-                val_hours = row[work_hours_col] if len(row) > work_hours_col else None
-                dept = current_department if current_department else "Unknown"
-
-                if dept.strip().lower() == "consolidatie":
-                    dept = "Consolidatie/Kantelen"
-                elif dept.strip().lower() == "transport coördinator":
-                    dept = "Laco"
+                val_hours = normalize_hours(row[work_hours_col] if len(row) > work_hours_col else None)
+                dept = normalize_department(current_department) if current_department else "Unknown"
 
                 shift = current_shift if current_shift else ""
 

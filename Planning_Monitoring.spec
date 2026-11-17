@@ -22,9 +22,9 @@ splash = Splash(
     'splash.png',
     binaries=a.binaries,
     datas=a.datas,
-    text_pos=(34, 232),
-    text_size=11,
-    text_color='white',
+    text_pos=(36, 246),
+    text_size=10,
+    text_color='#d6e2ee',
     always_on_top=False,
 )
 
