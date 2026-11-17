@@ -72,7 +72,7 @@ ROW_COLOR_LATE = "#FFE2A8"
 
 # Monitoring: pozycje wewnątrz działu (klient / strefa). Dla godzin liczy się tylko dział.
 SUB_POSITIONS = {
-    "Reachtruck": ["Noord", "Zuid", "Replenish", "Na-Nomi", "Consolidatie", "Kantel", "Extra", "Reflex"],
+    "Reachtruck": ["Noord", "Zuid", "Replenish", "Na-Nomi", "Kantel/Consolidatie", "Extra", "Reflex"],
     "Orderpicker": [
         "Choco (12)", "Pladis (22)", "ITR (18 20)", "Riverside (21)", "Ferrero (27+28)", "Nutricia (10)",
         "Petfood (13)", "Alpro (23)", "Essity (14)", "Pietercil (15)", "Tlant (25)", "Grenade",
@@ -94,11 +94,11 @@ DEPARTMENT_AS_POSITION = {
 MONITORING_GRID_COLUMNS = 8
 
 # Nazwy działów z planu w Excelu -> nazwy w aplikacji (klucze małymi literami)
-# Lista konsolidacji: reacher przypisany do RIT-u dostaje w dziale Reach strefę Kantel i/lub Consolidatie,
+# Lista konsolidacji: reacher przypisany do RIT-u dostaje w dziale Reach strefę Kantel/Consolidatie,
 # dopóki RIT nie ma „V" (zwiezione). Potem wracają jego poprzednie strefy.
 CONSOLIDATION_DEPARTMENT = "Reachtruck"
-CONSOLIDATION_KANTEL_ZONE = "Kantel"
-CONSOLIDATION_ZONE = "Consolidatie"
+CONSOLIDATION_ZONE = "Kantel/Consolidatie"
+CONSOLIDATION_OLD_ZONES = ("Kantel", "Consolidatie")  # dawne osobne strefy – zamieniane przy starcie
 CONSOLIDATION_IMPORT_DAYS = 2   # import z Excela: wiersze od (dziś - N dni)
 CONSOLIDATION_ACTIVE_DAYS = 1   # otwarte RIT-y starsze niż (dziś - N dni) nie zmieniają już stref
 

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -55,54 +56,48 @@ from .monitoring import MonitoringView
 from .table_model import EmployeeTableModel
 from .widgets import DatabaseLoadWorker, DatabaseTaskWorker, InfoItemDelegate, MainThreadRelay, ToggleButton
 
+# Widoki w menu po lewej: (nazwa, opis). Indeks = pozycja w QStackedWidget.
+VIEWS = [
+    ("Planning", "Hours per department for the whole shift"),
+    ("Monitoring", "Who is where right now – drag employees between departments"),
+    ("Consolidatie", "Consolidation list (RITs) – reacher assignment changes their task on Monitoring"),
+]
+
 
 class MainWindow(QMainWindow):
-    def __init__(self, with_monitoring=False):
+    def __init__(self):
         super().__init__()
-
-        self.with_monitoring = with_monitoring
-        self.monitoring_view = None
-        self.consolidation_view = None
 
         self.is_editing_info = False
         self.mark_mode = False
         self._active_threads = []
 
-        self.setWindowTitle("Planning Manager + Monitoring" if with_monitoring else "Planning Manager")
+        self.setWindowTitle("Planning Manager")
         self.setGeometry(100, 100, 1200, 600)
 
+        # Układ okna: menu widoków po lewej, po prawej pasek przycisków + bieżący widok
         self.main_widget = QWidget()
         self.setCentralWidget(self.main_widget)
-        self.main_layout = QVBoxLayout(self.main_widget)
+        outer_layout = QHBoxLayout(self.main_widget)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+        outer_layout.addWidget(self._build_sidebar())
+
+        content = QWidget()
+        self.main_layout = QVBoxLayout(content)
+        outer_layout.addWidget(content, 1)
 
         top_layout = QHBoxLayout()
         top_layout.setContentsMargins(5, 5, 5, 5)
         top_layout.setSpacing(3)
         self.main_layout.addLayout(top_layout)
 
-        if with_monitoring:
-            # Przełącznik widoków: Planning (tabela) / Monitoring (tablica) / Consolidatie (lista RIT-ów)
-            self.view_buttons = []
-            view_group = QButtonGroup(self)
-            view_group.setExclusive(True)
-            for index, title in enumerate(("Planning", "Monitoring", "Consolidatie")):
-                button = QPushButton(title)
-                button.setCheckable(True)
-                button.setMinimumHeight(40)
-                button.setStyleSheet("QPushButton:checked { background-color: #00BCff; color: #000; }")
-                button.clicked.connect(lambda _=False, i=index: self.show_view(i))
-                view_group.addButton(button, index)
-                top_layout.addWidget(button)
-                self.view_buttons.append(button)
-            self.view_buttons[0].setChecked(True)
-            top_layout.addSpacing(15)
-
-            self.logins_button = QPushButton("Import Logins")
-            self.logins_button.setFixedWidth(110)
-            self.logins_button.setMinimumHeight(40)
-            self.logins_button.setToolTip("Load the login list (Excel sheet with 'Login:' and 'Name:' columns)")
-            self.logins_button.clicked.connect(self.import_logins)
-            top_layout.addWidget(self.logins_button)
+        self.logins_button = QPushButton("Import Logins")
+        self.logins_button.setFixedWidth(110)
+        self.logins_button.setMinimumHeight(40)
+        self.logins_button.setToolTip("Load the login list (Excel sheet with 'Login:' and 'Name:' columns)")
+        self.logins_button.clicked.connect(self.import_logins)
+        top_layout.addWidget(self.logins_button)
 
         self.load_button = QPushButton("Import Excel")
         self.load_button.setFixedWidth(120)
@@ -155,15 +150,6 @@ class MainWindow(QMainWindow):
 
         top_layout.addSpacing(10)
 
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search: name, department, hours, info...  (Ctrl+F)")
-        self.search_edit.setClearButtonEnabled(True)
-        self.search_edit.setMinimumHeight(30)
-        self.search_edit.setMinimumWidth(200)
-        self.search_edit.setMaximumWidth(360)
-        self.search_edit.textChanged.connect(self.on_search_changed)
-        top_layout.addWidget(self.search_edit)
-
         self.count_label = QLabel("")
         top_layout.addWidget(self.count_label)
 
@@ -213,24 +199,22 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.sectionClicked.connect(self.sort_table)
 
-        if with_monitoring:
-            self.monitoring_view = MonitoringView()
-            self.monitoring_view.move_requested.connect(self.move_employees)
-            self.monitoring_view.toggle_position_requested.connect(self.toggle_position)
+        self.monitoring_view = MonitoringView()
+        self.monitoring_view.move_requested.connect(self.move_employees)
+        self.monitoring_view.toggle_position_requested.connect(self.toggle_position)
 
-            self.consolidation_view = ConsolidationView()
-            self.consolidation_view.update_requested.connect(self.update_consolidation)
-            self.consolidation_view.add_requested.connect(self.add_consolidation)
-            self.consolidation_view.delete_requested.connect(self.delete_consolidation)
-            self.consolidation_view.import_requested.connect(self.import_consolidation)
+        self.consolidation_view = ConsolidationView()
+        self.consolidation_view.update_requested.connect(self.update_consolidation)
+        self.consolidation_view.add_requested.connect(self.add_consolidation)
+        self.consolidation_view.delete_requested.connect(self.delete_consolidation)
+        self.consolidation_view.import_requested.connect(self.import_consolidation)
 
-            self.stack = QStackedWidget()
-            self.stack.addWidget(self.table)
-            self.stack.addWidget(self.monitoring_view)
-            self.stack.addWidget(self.consolidation_view)
-            self.main_layout.addWidget(self.stack)
-        else:
-            self.main_layout.addWidget(self.table)
+        # Kolejność = kolejność przycisków w menu po lewej (VIEWS)
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.table)
+        self.stack.addWidget(self.monitoring_view)
+        self.stack.addWidget(self.consolidation_view)
+        self.main_layout.addWidget(self.stack)
 
         legend = QHBoxLayout()
         legend.setContentsMargins(5, 0, 5, 3)
@@ -242,7 +226,8 @@ class MainWindow(QMainWindow):
         self.main_layout.addLayout(legend)
 
         QShortcut(QKeySequence.Undo, self, activated=self.undo_last)
-        QShortcut(QKeySequence.Find, self, activated=self.focus_search)
+        for index in range(len(VIEWS)):  # Ctrl+1 / Ctrl+2 / Ctrl+3 = przełączenie widoku
+            QShortcut(QKeySequence(f"Ctrl+{index + 1}"), self, activated=lambda i=index: self.show_view(i))
 
         self.context_menu = QMenu(self)
         self.context_menu.addAction("Add Department", self.add_department)
@@ -364,13 +349,12 @@ class MainWindow(QMainWindow):
             self.update_count_label()
             if self.monitoring_view is not None:
                 self.monitoring_view.set_employees(self.model.all_employees)
-            if self.consolidation_view is not None:
-                try:
-                    self.consolidation_view.set_data(
-                        db.load_consolidation(), self.model.all_employees, db.login_names()
-                    )
-                except Exception as exc:  # lista konsolidacji nie może zablokować reszty
-                    print(f"Consolidation refresh failed: {exc}")
+            try:
+                self.consolidation_view.set_data(
+                    db.load_consolidation(), self.model.all_employees, db.login_names()
+                )
+            except Exception as exc:  # lista konsolidacji nie może zablokować reszty
+                print(f"Consolidation refresh failed: {exc}")
             self.restore_selection(selected_ids)
             self.table.verticalScrollBar().setValue(scroll_value)
             self.set_controls_enabled(True)
@@ -470,7 +454,42 @@ class MainWindow(QMainWindow):
 
         self.run_db_task(lambda: db.toggle_employee_marked_in_db(emp_id, marked))
 
-    # -------------------------------------------------------------- monitoring
+    # ------------------------------------------------------------------- views
+    def _build_sidebar(self):
+        """Menu po lewej: jeden duży przycisk na widok (kolejne widoki = kolejna pozycja w VIEWS)."""
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(150)
+        sidebar.setStyleSheet(
+            "#sidebar { background-color: #1f2a36; }"
+            "#sidebar QLabel { color: #d6e2ee; font-weight: bold; padding: 12px 10px 8px 10px; }"
+            "#sidebar QPushButton { color: #d6e2ee; background: transparent; border: none; text-align: left;"
+            " padding: 12px 14px; font-size: 14px; border-left: 4px solid transparent; }"
+            "#sidebar QPushButton:hover { background-color: #2c3b4b; }"
+            "#sidebar QPushButton:checked { background-color: #34495e; color: #ffffff;"
+            " border-left: 4px solid #00BCff; font-weight: bold; }"
+        )
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(QLabel("Planning Manager"))
+
+        self.view_buttons = []
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+        for index, (title, tooltip) in enumerate(VIEWS):
+            button = QPushButton(title)
+            button.setCheckable(True)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip(f"{tooltip}  (Ctrl+{index + 1})")
+            button.clicked.connect(lambda _=False, i=index: self.show_view(i))
+            group.addButton(button, index)
+            layout.addWidget(button)
+            self.view_buttons.append(button)
+        self.view_buttons[0].setChecked(True)
+        layout.addStretch()
+        return sidebar
+
     def show_view(self, index):
         self.stack.setCurrentIndex(index)
         self.view_buttons[index].setChecked(True)
@@ -556,17 +575,6 @@ class MainWindow(QMainWindow):
             on_finished=done,
             refresh_after=True,
         )
-
-    # ------------------------------------------------------------------ search
-    def focus_search(self):
-        self.search_edit.setFocus()
-        self.search_edit.selectAll()
-
-    def on_search_changed(self, text):
-        selected_ids = self.selected_employee_ids()
-        self.model.set_filter(text)
-        self.restore_selection(selected_ids)
-        self.update_count_label()
 
     def update_count_label(self):
         shown = len(self.model.employees)

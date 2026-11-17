@@ -1,7 +1,7 @@
 """Widok Consolidatie: lista RIT-ów do konsolidacji z przypisanymi reacherami.
 
 Widok niczego sam nie zapisuje – wysyła sygnały, a główne okno zapisuje w bazie.
-Przypisanie reachera do RIT-u (bez „V") daje mu na Monitoringu strefę Kantel / Consolidatie.
+Przypisanie reachera do RIT-u (bez „V") daje mu na Monitoringu strefę Kantel/Consolidatie.
 """
 from datetime import date
 
@@ -67,7 +67,7 @@ class ReacherDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Tick the reacher(s) for this RIT.\n"
-                                "They get the Kantel / Consolidatie zone on Monitoring until V is set."))
+                                "They get the Kantel/Consolidatie zone on Monitoring until V is set."))
 
         self.list = QListWidget()
         layout.addWidget(self.list)
@@ -197,7 +197,9 @@ class ConsolidationView(QWidget):
         self.date_combo.currentIndexChanged.connect(lambda _: self._rebuild())
         bar.addWidget(self.date_combo)
 
-        self.hide_finished = QCheckBox("Hide finished (V + Done)")
+        # Jak filtr w oryginalnym pliku: RIT z „X" w Done (konsolidacja zrobiona) znika z listy roboczej
+        self.hide_finished = QCheckBox("Hide done (X)")
+        self.hide_finished.setChecked(True)
         self.hide_finished.toggled.connect(lambda _: self._rebuild())
         bar.addWidget(self.hide_finished)
         bar.addSpacing(15)
@@ -220,7 +222,7 @@ class ConsolidationView(QWidget):
         layout.addLayout(bar)
 
         hint = QLabel(
-            "Click the Reacher cell = assign reacher(s): they get the Kantel / Consolidatie zone on Monitoring  ·  "
+            "Click the Reacher cell = assign reacher(s): they get the Kantel/Consolidatie zone on Monitoring  ·  "
             "Tick V when the RIT is driven in = the reacher goes back to their previous zone  ·  "
             "Done = consolidation finished  ·  Double-click Lane / Comment / Time / pallets to edit"
         )
@@ -300,7 +302,7 @@ class ConsolidationView(QWidget):
             f"Consolidatie {total_amount - total_kantel})"
         )
         if self.hide_finished.isChecked():
-            rows = [r for r in rows if not (r["v"] and r["done"])]
+            rows = [r for r in rows if not r["done"]]
         self.shown_rows = rows
 
         by_token = {employee_token(e): e for e in self.employees}

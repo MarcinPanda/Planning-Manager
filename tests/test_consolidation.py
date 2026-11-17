@@ -12,6 +12,7 @@ from pm.excel_io import parse_reachers
 from conftest import make_employee
 
 TODAY = date.today().isoformat()
+KC = "Kantel/Consolidatie"
 
 
 @pytest.fixture(scope="module")
@@ -46,17 +47,17 @@ def test_assign_reacher_switches_zone_until_v(temp_db):
     kantel_rit = db.add_consolidation_in_db(TODAY, "526001", time="10:00", amount=20, kantel=20)
     mixed_rit = db.add_consolidation_in_db(TODAY, "526002", time="11:00", amount=10, kantel=4)
 
-    # przypisanie -> strefa Kantel zamiast Noord
+    # przypisanie -> strefa Kantel/Consolidatie zamiast Noord
     changes = db.update_consolidation_in_db(kantel_rit, reachers=["052"])
-    assert changes and _emp(reacher).positions == ["Kantel"]
+    assert changes and _emp(reacher).positions == [KC]
 
-    # drugi RIT z paletami do kantelowania i konsolidacji -> obie strefy
+    # drugi RIT -> nadal jedna strefa
     db.update_consolidation_in_db(mixed_rit, reachers=["052"])
-    assert _emp(reacher).positions == ["Consolidatie", "Kantel"]
+    assert _emp(reacher).positions == [KC]
 
-    # pierwszy zwieziony -> zostaje to, czego wymaga drugi RIT
+    # pierwszy zwieziony -> drugi RIT nadal otwarty
     db.update_consolidation_in_db(kantel_rit, v=True)
-    assert _emp(reacher).positions == ["Consolidatie", "Kantel"]
+    assert _emp(reacher).positions == [KC]
 
     # oba zwiezione -> wraca Noord
     db.update_consolidation_in_db(mixed_rit, v=True)
@@ -73,12 +74,12 @@ def test_reacher_without_login_and_outside_reach(temp_db):
     rit = db.add_consolidation_in_db(TODAY, "1", amount=5, kantel=0)
 
     db.update_consolidation_in_db(rit, reachers=[f"id:{reacher}", f"id:{picker}"])
-    assert _emp(reacher).positions == ["Consolidatie"]
+    assert _emp(reacher).positions == [KC]
     assert _emp(picker).positions == []   # nie jest w Reach – na Monitoringu bez zmian
 
     # osoba przeniesiona do Reach w trakcie dostaje od razu strefę z RIT-u
     db.move_employees_in_db([picker], "Reachtruck", "Zuid", "10:00")
-    assert _emp(picker).positions == ["Consolidatie"]
+    assert _emp(picker).positions == [KC]
 
     # zdjęcie reachera z RIT-u -> wracają poprzednie strefy
     db.update_consolidation_in_db(rit, reachers=[])
@@ -90,7 +91,7 @@ def test_delete_rit_releases_reacher(temp_db):
     reacher = make_employee(department="Reachtruck")
     rit = db.add_consolidation_in_db(TODAY, "7", amount=3, kantel=3)
     db.update_consolidation_in_db(rit, reachers=[f"id:{reacher}"])
-    assert _emp(reacher).positions == ["Kantel"]
+    assert _emp(reacher).positions == [KC]
     db.delete_consolidation_in_db([rit])
     assert _emp(reacher).positions == []
     assert db.load_consolidation() == []
@@ -123,7 +124,7 @@ def test_import_from_excel_and_merge(temp_db):
 
     added, updated, changes = db.import_consolidation_from_excel(path)
     assert (added, updated) == (3, 0)
-    assert _emp(reacher).positions == ["Kantel"]
+    assert _emp(reacher).positions == [KC]
 
     rows = db.load_consolidation(TODAY)
     assert [(r["rit"], r["seq"]) for r in rows] == [("526145", 1), ("526146", 1), ("526146", 2)]
@@ -143,7 +144,7 @@ def test_import_from_excel_and_merge(temp_db):
     rows = {r["seq"] if r["rit"] == "526146" else 0: r for r in db.load_consolidation(TODAY)}
     assert rows[0]["v"] is True
     assert (rows[1]["reachers"], rows[1]["lane"], rows[1]["amount"]) == (["003"], "B-1", 30)
-    assert _emp(reacher).positions == ["Consolidatie"]  # 526145 zwieziony, 526146 (bez kantelowania) otwarty
+    assert _emp(reacher).positions == [KC]  # 526145 zwieziony, 526146 (bez kantelowania) otwarty
 
 
 def test_consolidation_view(app, temp_db):
@@ -173,7 +174,7 @@ def test_main_window_has_consolidation_view(app, temp_db):
 
     make_employee(department="Reachtruck")
     db.add_consolidation_in_db(TODAY, "1", amount=1)
-    window = MainWindow(with_monitoring=True)
+    window = MainWindow()
     window.sync_timer.stop()
     for _ in range(200):
         app.processEvents()
@@ -185,3 +186,24 @@ def test_main_window_has_consolidation_view(app, temp_db):
     assert window.stack.currentWidget() is window.consolidation_view
     assert window.consolidation_view.table.rowCount() == 1
     window.close()
+
+
+def test_old_kantel_and_consolidatie_zones_are_merged(temp_db):
+    emp = make_employee(department="Reachtruck")
+    conn = db.get_connection()
+    conn.execute("UPDATE employees SET position = 'Noord;Kantel;Consolidatie' WHERE id = ?", (emp,))
+    conn.commit()
+    conn.close()
+    db.init_db()
+    assert _emp(emp).positions == ["Noord", KC]
+
+
+def test_done_rows_hidden_by_default(app, temp_db):
+    open_rit = db.add_consolidation_in_db(TODAY, "1", amount=1)
+    done_rit = db.add_consolidation_in_db(TODAY, "2", amount=1)
+    db.update_consolidation_in_db(done_rit, done=True)
+    view = ConsolidationView()
+    view.set_data(db.load_consolidation(), [], {})
+    assert [r["id"] for r in view.shown_rows] == [open_rit]
+    view.hide_finished.setChecked(False)
+    assert view.table.rowCount() == 2

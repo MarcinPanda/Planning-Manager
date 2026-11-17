@@ -54,9 +54,10 @@ def test_main_window_builds(app, temp_db):
     assert window.model.rowCount() == 1
     assert len(window.visible_rows()[0]) == len(columns) - 1
 
-    window.search_edit.setText("zzz-nobody")
-    assert window.model.rowCount() == 0
-    assert window.count_label.text() == "0 / 1"
+    assert window.count_label.text() == "1"
+    assert [b.text() for b in window.view_buttons] == ["Planning", "Monitoring", "Consolidatie"]
+    window.view_buttons[2].click()
+    assert window.stack.currentWidget() is window.consolidation_view
     window.close()
 
 

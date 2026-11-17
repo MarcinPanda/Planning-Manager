@@ -162,9 +162,9 @@ def test_several_zones_at_once(app, temp_db):
 
     # przeniesienie z innego działu prosto na strefę
     other = make_employee(lastname="Other", department="Laden")
-    db.move_employees_in_db([other], "Reachtruck", "Kantel", "10:00")
+    db.move_employees_in_db([other], "Reachtruck", "Kantel/Consolidatie", "10:00")
     moved = [e for e in db.load_employees_from_db() if e.employee_id == other][0]
-    assert (moved.active_department, moved.positions) == ("Reachtruck", ["Kantel"])
+    assert (moved.active_department, moved.positions) == ("Reachtruck", ["Kantel/Consolidatie"])
 
     # przejście do innego działu kasuje strefy
     db.move_employees_in_db([emp_id], "Laden", "", "10:00")
@@ -219,7 +219,7 @@ def test_main_window_with_monitoring(app, temp_db):
     from pm.main_window import MainWindow
 
     make_employee(department="Orderpicker")
-    window = MainWindow(with_monitoring=True)
+    window = MainWindow()
     window.sync_timer.stop()
 
     from test_ui_smoke import QApplicationSleep

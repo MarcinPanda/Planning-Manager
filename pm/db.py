@@ -156,6 +156,19 @@ def init_db():
             (new_dept, old_name),
         )
 
+    # Starsze wersje miały w Reach dwie strefy „Kantel" i „Consolidatie" – teraz to jedna strefa.
+    for table, key in (("employees", "id"), ("consolidation_prev", "employee_id")):
+        column = "position" if table == "employees" else "positions"
+        rows = cursor.execute(
+            f"SELECT {key}, {column} FROM {table} WHERE {column} LIKE '%Kantel%' OR {column} LIKE '%Consolidatie%'"
+        ).fetchall()
+        for row_id, value in rows:
+            merged = join_positions([
+                config.CONSOLIDATION_ZONE if p in config.CONSOLIDATION_OLD_ZONES else p for p in split_positions(value)
+            ])
+            if merged != value:
+                cursor.execute(f"UPDATE {table} SET {column} = ? WHERE {key} = ?", (merged, row_id))
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_departments_employee_id ON departments(employee_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_employees_name ON employees(lastname, firstname)")
 
@@ -947,14 +960,9 @@ def employee_token(emp):
     return emp.login or f"id:{emp.employee_id}"
 
 
-def consolidation_zones(amount, kantel):
-    """Strefy, które daje RIT: Kantel, gdy są palety do kantelowania, Consolidatie dla reszty."""
-    zones = []
-    if kantel > 0:
-        zones.append(config.CONSOLIDATION_KANTEL_ZONE)
-    if amount - kantel > 0 or not zones:
-        zones.append(config.CONSOLIDATION_ZONE)
-    return zones
+def consolidation_zones(amount=0, kantel=0):
+    """Strefa, którą daje RIT reacherowi: zawsze jedna – „Kantel/Consolidatie"."""
+    return [config.CONSOLIDATION_ZONE]
 
 
 def _row_to_dict(row):
@@ -1008,7 +1016,7 @@ def _sync_consolidation_zones(cursor):
     - ostatni RIT zwieziony („V"): wracają zapamiętane strefy.
     Dotyczy tylko osób, które są teraz w dziale Reach. Godzin nie zmienia.
     """
-    managed = {config.CONSOLIDATION_KANTEL_ZONE, config.CONSOLIDATION_ZONE}
+    managed = {config.CONSOLIDATION_ZONE, *config.CONSOLIDATION_OLD_ZONES}
     since = (date.today() - timedelta(days=config.CONSOLIDATION_ACTIVE_DAYS)).isoformat()
 
     wanted = {}

@@ -7,7 +7,7 @@ from . import db, splash
 from .main_window import MainWindow
 
 
-def main(with_monitoring=False):
+def main():
     splash.step(2, "Opening database...")
     db.init_db()
     db.backup_db()
@@ -15,7 +15,7 @@ def main(with_monitoring=False):
     splash.step(3, "Building the window...")
     app = QApplication(sys.argv)
 
-    main_window = MainWindow(with_monitoring=with_monitoring)
+    main_window = MainWindow()
     main_window.showMaximized()
     splash.close()
 

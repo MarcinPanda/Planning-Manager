@@ -8,16 +8,16 @@ przypisania do działów w ciągu dnia, przerwy i automatycznie liczone godziny.
 ```bash
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-dev.txt
-.venv\Scripts\python planning_manager.py
+.venv\Scripts\python planning_monitoring.py
 ```
 
 ## Budowanie exe
 
 ```bash
-.venv\Scripts\python -m PyInstaller Planning_Manager.spec --noconfirm --distpath dist --workpath build
+.venv\Scripts\python -m PyInstaller Planning_Monitoring.spec --noconfirm --distpath dist --workpath build
 ```
 
-Wynik: `dist\PlanningManager.exe` (jeden plik, bez instalacji).
+Wynik: `dist\PlanningMonitoring.exe` (jeden plik, bez instalacji).
 
 ## Testy
 
@@ -49,7 +49,7 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
 - „Ziek" i „Naar Huis" liczą się jako 0 h; „Naar Huis" skraca godziny pracy (celowo).
 - Oznaczanie spóźnienia („Late").
 - Kolory wierszy: chory, poszedł do domu, spóźniony.
-- Wyszukiwarka (Ctrl+F): nazwisko, dział, godziny, info.
+- Menu widoków po lewej: Planning, Monitoring, Consolidatie (skróty Ctrl+1 / Ctrl+2 / Ctrl+3).
 - Cofnij (Ctrl+Z) – 30 ostatnich operacji.
 - Historia zmian: kto, kiedy, co.
 - Eksport widocznej tabeli do Excela i wydruk z podglądem.
@@ -59,7 +59,7 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
 
 | Plik | Zawartość |
 | --- | --- |
-| `planning_manager.py` | punkt startowy |
+| `planning_monitoring.py` | punkt startowy |
 | `pm/config.py` | stałe: działy, zmiany, przerwy, kolory, wyjątki dla nazwisk |
 | `pm/logic.py` | liczenie godzin, przerwy, nazwiska, klasa `Employee` (bez Qt i bez bazy) |
 | `pm/db.py` | baza SQLite, dziennik zmian, cofanie, kopie zapasowe |
@@ -71,9 +71,10 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
 | `tests/` | testy automatyczne |
 | `Planning + Monitoring.py` | projekt poboczny (prototyp widoku Monitoring) – nie jest częścią aplikacji |
 
-## Wersja z Monitoringiem (`planning_monitoring.py`)
+## Widok Monitoring
 
-Ta sama aplikacja i baza, dodatkowo przełącznik Planning / Monitoring.
+Aplikacja to jeden program z trzema widokami (Planning, Monitoring, Consolidatie) na jednej bazie.
+Monitoring to „oczy steeringu": kto gdzie teraz jest i co robi.
 
 - Tablica wszystkich działów; pracownik to kostka z nazwiskiem, loginem i godziną zmiany.
 - Przeciągnięcie na inny dział zapisuje zmianę działu z aktualną godziną.
@@ -84,12 +85,10 @@ Ta sama aplikacja i baza, dodatkowo przełącznik Planning / Monitoring.
 - „Import Logins" wczytuje spis loginów z Excela (plik Inlognamen z kodami N012P / R012R albo kolumny `Login:` i `Name:`); loginy są
   dopasowywane po nazwisku i zostają w bazie na kolejne dni.
 
-Budowanie: `.venv\Scripts\python -m PyInstaller Planning_Monitoring.spec --noconfirm --distpath dist --workpath build`
-
 ### Widok Consolidatie (lista RIT-ów)
 
-- Przycisk **Consolidatie** u góry przełącza na listę RIT-ów; **Import Consolidatie** wczytuje plik `Consolidatie_2026.xlsx` (zakładka Consolidatie, wiersze z ostatnich 2 dni i kolejnych). Ponowny import dodaje nowe RIT-y i nie nadpisuje tego, co wpisano w aplikacji.
+- Pozycja **Consolidatie** w menu po lewej przełącza na listę RIT-ów; **Import Consolidatie** wczytuje plik `Consolidatie_2026.xlsx` (zakładka Consolidatie, wiersze z ostatnich 2 dni i kolejnych). Ponowny import dodaje nowe RIT-y i nie nadpisuje tego, co wpisano w aplikacji.
 - Kliknięcie w kolumnę **Reacher** = przypisanie reachera (lista osób z działu Reach albo login, np. `R052R`).
-- Przypisany reacher, dopóki RIT nie ma **V** (zwiezione), dostaje na Monitoringu strefę **Kantel** (gdy RIT ma palety do kantelowania) i/lub **Consolidatie** (pozostałe palety). Po V wracają jego poprzednie strefy. Godziny nadal liczą się dla Reach.
-- **Done** = konsolidacja zrobiona (bez wpływu na strefy). Lane, Comment, Time i liczby palet edytuje się dwuklikiem.
+- Przypisany reacher, dopóki RIT nie ma **V** (zwiezione), dostaje na Monitoringu strefę **Kantel/Consolidatie**. Po V wracają jego poprzednie strefy. Godziny nadal liczą się dla Reach.
+- **Done** (X) = konsolidacja zrobiona (bez wpływu na strefy); takie RIT-y są domyślnie ukryte ("Hide done"). Lane, Comment, Time i liczby palet edytuje się dwuklikiem.
 - Plik Excel nie jest zmieniany przez aplikację.

@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Build: pyinstaller Planning_Manager.spec --noconfirm
+# Build: pyinstaller Planning_Monitoring.spec --noconfirm
 
 a = Analysis(
     ['planning_monitoring.py'],
