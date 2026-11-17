@@ -15,6 +15,10 @@ Lista zebrana z dyktowania. Numery w nawiasach = numery zadań z rozmowy.
 - [ ] Strefy: Picking North = Choco, Pladis, Ferrero, Nutricia, Riverside, Alpro, Petfood, Essity,
       SCT (?), Pietercil, Tlant; Picking South = Mars GUM, Mars ITR, Grenade, Jordan, Reflex;
       Reach South = Zuid, Mars ITR, Grenade, Jordan, Reflex (bez Mars NL i Pietercil). (10–12)
+- [ ] Kilka stref / klientów naraz (picking: 1–wszystkie autoryzacje; reach: np. Na-Nomi + Replenish).
+      Baza to już obsługuje (Ctrl + przeciągnięcie), ale trzeba prostszego sposobu: prawy klik na
+      karcie → lista stref z ptaszkami do zaznaczenia; karta widoczna w każdej zaznaczonej strefie
+      z oznaczeniem, że osoba ma więcej stref. (24)
 - [ ] Karty: pełniejsze imię i nazwisko zamiast inicjału; długie nazwiska skracane „…" na końcu,
       pełne w podpowiedzi. (20)
 - [ ] Środek tablicy mieści się na szerokość bez przewijania; węższy panel po prawej. (2)
