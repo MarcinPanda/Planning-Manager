@@ -1,7 +1,7 @@
 """Odczyt planu z plików Excel i eksport tabeli do Excela."""
 import re
 
-from .config import DEPARTMENT_ALIASES, DEPARTMENT_OVERRIDES, SPECIAL_FUNCTIONS, TEAM_LIST, col_names
+from .config import DEPARTMENT_ALIASES, DEPARTMENT_AS_POSITION, DEPARTMENT_OVERRIDES, SPECIAL_FUNCTIONS, TEAM_LIST, col_names
 from .logic import (
     adjust_work_hours,
     compute_hours_with_breaks,
@@ -16,6 +16,14 @@ def _pd():
     return pandas
 
 
+def warm_up():
+    """Doczytuje pandas w tle po starcie, żeby pierwszy import planu nie czekał."""
+    try:
+        _pd()
+    except Exception:
+        pass
+
+
 def parse_section_header(text):
     """' / Warehouse 1 / Ochtend / Stuwarooij/Omstapelen/ Week47' -> ('Ochtend', 'Stuwarooij/Omstapelen').
     Dział to wszystko między zmianą a końcowym 'WeekNN' (może zawierać '/')."""
@@ -26,6 +34,11 @@ def parse_section_header(text):
     shift = parts[1] if len(parts) >= 2 and parts[1] in ("Ochtend", "Middag", "Day8to17") else None
     department = "/".join(parts[2:]) if len(parts) >= 3 else None
     return shift, department
+
+
+def _loose_key(text):
+    """Klucz do DEPARTMENT_AS_POSITION: małe litery, pojedyncze spacje."""
+    return " ".join(str(text).casefold().split())
 
 
 def _loose(text):
@@ -112,6 +125,10 @@ def read_planning_excel(filepaths):
             if isinstance(val_d, str) and val_d.strip() and isinstance(val_e, str) and val_e.strip():
                 val_hours = normalize_hours(row[work_hours_col] if len(row) > work_hours_col else None)
                 dept = normalize_department(current_department) if current_department else "Unknown"
+                position = ""
+                as_position = DEPARTMENT_AS_POSITION.get(_loose_key(dept))
+                if as_position:
+                    dept, position = as_position
 
                 shift = current_shift if current_shift else ""
 
@@ -132,11 +149,11 @@ def read_planning_excel(filepaths):
                         dept = rule["to"]
                         val_hours = adjust_work_hours(val_hours, dept)
 
-                employees_list.append([lastname, firstname, dept, val_hours, shift])
+                employees_list.append([lastname, firstname, dept, val_hours, shift, position])
 
     employees_df = _pd().DataFrame(
         employees_list,
-        columns=["lastname", "firstname", "current_department", "work_hours", "shift"]
+        columns=["lastname", "firstname", "current_department", "work_hours", "shift", "position"]
     )
     employees_df = employees_df.dropna(subset=["lastname", "firstname"])
 
@@ -190,13 +207,24 @@ def read_logins_excel(filepath):
     - plik z kodami (kolumny Naam / Noord 'N012P' / Zuid 'Z012P' / Reach 'R012R'),
     - plik z kolumnami 'Login:' i 'Name:' (np. zakładka Logins).
     """
-    sheets = _pd().read_excel(filepath, sheet_name=None, header=None, dtype=str)
+    # Bez pandas: openpyxl w trybie tylko do odczytu jest wielokrotnie szybszy przy pierwszym użyciu.
+    import openpyxl
+
+    workbook = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+    try:
+        sheets = {ws.title: [list(row) for row in ws.iter_rows(values_only=True)] for ws in workbook.worksheets}
+    finally:
+        workbook.close()
     names = sorted(sheets, key=lambda n: 0 if n.strip().lower() in ("logins", "inlognamen") else 1)
+
+    def cell(rows, r, c):
+        row = rows[r]
+        return row[c] if c < len(row) else None
 
     for sheet_name in names:
         data = sheets[sheet_name]
         for r in range(min(len(data), 30)):
-            cells = [str(v).strip().lower().rstrip(":") if isinstance(v, str) else "" for v in data.iloc[r]]
+            cells = [str(v).strip().lower().rstrip(":") if isinstance(v, str) else "" for v in data[r]]
             name_col = next((i for i, c in enumerate(cells) if c in ("name", "naam")), None)
             if name_col is None:
                 continue
@@ -208,12 +236,12 @@ def read_logins_excel(filepath):
 
             result = []
             for i in range(r + 1, len(data)):
-                name = data.iat[i, name_col]
+                name = cell(data, i, name_col)
                 if not isinstance(name, str) or not name.strip() or name.strip() == "0":
                     continue
                 login = ""
                 for col in code_cols + login_cols:
-                    login = normalize_login(data.iat[i, col])
+                    login = normalize_login(cell(data, i, col))
                     if login:
                         break
                 if login:

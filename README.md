@@ -78,8 +78,9 @@ Ta sama aplikacja i baza, dodatkowo przełącznik Planning / Monitoring.
 - Tablica wszystkich działów; pracownik to kostka z nazwiskiem, loginem i godziną zmiany.
 - Przeciągnięcie na inny dział zapisuje zmianę działu z aktualną godziną.
 - Piking i Reach Outbound mają pozycje (klienci, strefy). Dla godzin liczy się tylko dział.
-- Działy ze strefami (Reach, Na-Nomi, Orderpick, Bufferzone) to tabele jak w Excelu: kliknięcie komórki
-  włącza / wyłącza strefę, jedna osoba może mieć kilka stref naraz.
+- Działy ze strefami (Reach, Orderpick) to tabele jak w Excelu: kliknięcie komórki
+  włącza / wyłącza strefę, jedna osoba może mieć kilka stref naraz. „Nanomi Reachtruck" z planu
+  to Reach ze strefą Na-Nomi.
 - „Import Logins" wczytuje spis loginów z Excela (plik Inlognamen z kodami N012P / R012R albo kolumny `Login:` i `Name:`); loginy są
   dopasowywane po nazwisku i zostają w bazie na kolejne dni.
 

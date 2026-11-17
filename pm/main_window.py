@@ -236,9 +236,19 @@ class MainWindow(QMainWindow):
 
         # Auto-synchronizacja co 10 s (z Planning.py) – pomijana podczas edycji Info
         # lub gdy w tle trwa inna operacja na bazie.
+        # Ciężkie biblioteki do Excela doczytujemy w tle, gdy okno już działa.
+        QTimer.singleShot(1500, self._warm_up_excel)
+
         self.sync_timer = QTimer(self)
         self.sync_timer.timeout.connect(self.auto_refresh)
         self.sync_timer.start(SYNC_INTERVAL_MS)
+
+    def _warm_up_excel(self):
+        import threading
+
+        from .excel_io import warm_up
+
+        threading.Thread(target=warm_up, name="excel-warm-up", daemon=True).start()
 
     def auto_refresh(self):
         if self.is_editing_info or self._active_threads:

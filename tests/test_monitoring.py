@@ -233,3 +233,63 @@ def test_main_window_with_monitoring(app, temp_db):
     assert window.stack.currentIndex() == 1
     assert len(window.monitoring_view.tables["Orderpicker"].employees) == 1
     window.close()
+
+
+def test_nanomi_is_reach_zone_and_buffer_is_plain(app, temp_db):
+    import sqlite3
+
+    import pandas as pd
+
+    from pm import config
+
+    plan = str(temp_db / "plan.xlsx")
+    rows = [
+        [None, " / Warehouse 1 / Ochtend / Nanomi Reachtruck/ Week47", None, None, None, None],
+        [None, None, None, "Achternaam", "Voornaam", "Uren"],
+        [None, None, None, "Kowalski", "Jan", "06:00-15:00"],
+        [None, " / Warehouse 1 / Ochtend / Bufferzone/ Week47", None, None, None, None],
+        [None, None, None, "Nowak", "Ewa", "06:00-15:00"],
+    ]
+    pd.DataFrame(rows).to_excel(plan, header=False, index=False)
+    assert db.import_excel_to_db([plan]) == (2, 0, [])
+
+    by_name = {e.lastname: e for e in db.load_employees_from_db()}
+    assert (by_name["Kowalski"].active_department, by_name["Kowalski"].positions) == ("Reachtruck", ["Na-Nomi"])
+    assert by_name["Kowalski"].computed_hours == "8.00"
+    assert (by_name["Nowak"].active_department, by_name["Nowak"].positions) == ("Buffer", [])
+
+    view = MonitoringView()
+    view.set_employees(db.load_employees_from_db())
+    assert "Buffer" in view.zones and "Buffer" not in view.tables
+    assert [e.lastname for e in view.tables["Reachtruck"].employees] == ["Kowalski"]
+
+    # baza z poprzedniej wersji: „Nanomi Reachtruck" jako osobny dział -> Reach + Na-Nomi
+    conn = sqlite3.connect(config.DB_PATH)
+    conn.execute("UPDATE employees SET current_department = 'Nanomi Reachtruck', position = '' WHERE lastname = 'Kowalski'")
+    conn.execute("UPDATE departments SET department = 'Nanomi Reachtruck' WHERE department = 'Reachtruck'")
+    conn.commit()
+    conn.close()
+    db.init_db()
+    emp = {e.lastname: e for e in db.load_employees_from_db()}["Kowalski"]
+    assert (emp.active_department, emp.positions) == ("Reachtruck", ["Na-Nomi"])
+
+
+def test_logins_reader_does_not_need_pandas(temp_db):
+    import subprocess
+    import sys
+
+    import pandas as pd
+
+    path = str(temp_db / "inlognamen.xlsx")
+    pd.DataFrame([["Naam", "Noord", "Reach"], ["Jan Kowalski", "N012P", "R012R"]]).to_excel(
+        path, sheet_name="Inlognamen", header=False, index=False)
+
+    code = (
+        "import sys; sys.path.insert(0, '.');"
+        "from pm.excel_io import read_logins_excel;"
+        f"print(read_logins_excel({path!r}));"
+        "print('pandas' in sys.modules)"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.split("\n")
+    assert out[0] == "[('Jan Kowalski', '012')]"
+    assert out[1] == "False"

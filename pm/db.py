@@ -110,6 +110,21 @@ def init_db():
         )
     """)
 
+    # Starsze wersje traktowały „Nanomi Reachtruck" jako osobny dział – teraz to Reach ze strefą Na-Nomi.
+    for old_name, (new_dept, new_position) in config.DEPARTMENT_AS_POSITION.items():
+        cursor.execute("""
+            UPDATE employees SET position = ?
+            WHERE lower(current_department) = ? AND (position IS NULL OR position = '')
+        """, (new_position, old_name))
+        cursor.execute(
+            "UPDATE employees SET current_department = ? WHERE lower(current_department) = ?",
+            (new_dept, old_name),
+        )
+        cursor.execute(
+            "UPDATE departments SET department = ? WHERE lower(department) = ?",
+            (new_dept, old_name),
+        )
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_departments_employee_id ON departments(employee_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_employees_name ON employees(lastname, firstname)")
 
@@ -832,14 +847,17 @@ def import_excel_to_db(filepaths):
             lastname, firstname = move_lastname_prefix_to_firstname(row_["lastname"], row_["firstname"])
 
             key = (lastname, firstname, row_["current_department"], row_["work_hours"], row_["shift"])
+            position = row_.get("position", "") or ""
             if key in seen:
                 skipped += 1
                 continue
             seen.add(key)
 
             cursor.execute("""
-                INSERT INTO employees (lastname, firstname, current_department, work_hours, shift, computed_hours, marked)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO employees (
+                    lastname, firstname, current_department, work_hours, shift, computed_hours, marked, position
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 lastname,
                 firstname,
@@ -847,7 +865,8 @@ def import_excel_to_db(filepaths):
                 row_["work_hours"],
                 row_["shift"],
                 row_["computed_hours"],
-                0
+                0,
+                position,
             ))
 
             employee_id = cursor.lastrowid

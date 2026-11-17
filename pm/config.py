@@ -16,7 +16,7 @@ TEAM_LIST = [
     "Laco", "Laden", "Logistiek coördinator", "Naar Huis", "Opleiding", "Orderpicker", "Pendel", "Project", "Reachtruck", "Reflex",
     "Retouren", "Shiftleader", "Schoonmaak", "Stock Control", "Sturing", "Teamleader", "VAL", "Ziek",
     # działy, które występują w planie z Excela
-    "Inleren Reachtruck", "Nanomi Reachtruck", "Stuwarooij/Omstapelen",
+    "Inleren Reachtruck", "Stuwarooij/Omstapelen",
 ]
 TEAM_LIST.sort(key=lambda x: x.lower())
 
@@ -72,22 +72,24 @@ ROW_COLOR_LATE = "#FFE2A8"
 
 # Monitoring: pozycje wewnątrz działu (klient / strefa). Dla godzin liczy się tylko dział.
 SUB_POSITIONS = {
-    "Reachtruck": ["Noord", "Zuid", "Replenish", "Consolidatie", "Kantel", "Extra", "Reflex"],
-    "Nanomi Reachtruck": ["Noord", "Zuid"],
+    "Reachtruck": ["Noord", "Zuid", "Replenish", "Na-Nomi", "Consolidatie", "Kantel", "Extra", "Reflex"],
     "Orderpicker": [
         "Choco (12)", "Pladis (22)", "ITR (18 20)", "Riverside (21)", "Ferrero (27+28)", "Nutricia (10)",
         "Petfood (13)", "Alpro (23)", "Essity (14)", "Pietercil (15)", "Tlant (25)", "Grenade",
     ],
-    "Buffer": [
-        "Choco (12)", "Pladis (22)", "ITR (18 20)", "Ferrero (27/28)", "Nutricia (10)", "Essity (14)",
-        "Alpro (23)", "Petfood (13)", "Pietercil (15)", "Tlant (25)", "Grenade",
-    ],
 }
 SUB_POSITION_TITLES = {
     "Reachtruck": "Outbound Reach",
-    "Nanomi Reachtruck": "Na-Nomi",
     "Orderpicker": "Orderpick",
-    "Buffer": "Bufferzone",
+}
+
+# Działy z planu, które w aplikacji są strefą innego działu: nazwa (małe litery) -> (dział, strefa).
+# Godziny liczą się dla działu (Na-Nomi = Reach).
+DEPARTMENT_AS_POSITION = {
+    "nanomi reachtruck": ("Reachtruck", "Na-Nomi"),
+    "na-nomi reachtruck": ("Reachtruck", "Na-Nomi"),
+    "nanomi": ("Reachtruck", "Na-Nomi"),
+    "na-nomi": ("Reachtruck", "Na-Nomi"),
 }
 MONITORING_GRID_COLUMNS = 8
 
