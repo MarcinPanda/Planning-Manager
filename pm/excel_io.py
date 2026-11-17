@@ -1,5 +1,4 @@
 """Odczyt planu z plików Excel i eksport tabeli do Excela."""
-import pandas as pd
 
 from .config import DEPARTMENT_OVERRIDES, SPECIAL_FUNCTIONS, col_names
 from .logic import (
@@ -10,13 +9,19 @@ from .logic import (
 )
 
 
+def _pd():
+    """pandas jest ciężki – ładujemy go dopiero, gdy naprawdę jest potrzebny (szybszy start)."""
+    import pandas
+    return pandas
+
+
 def read_planning_excel(filepaths):
     """Czyta pliki planu i zwraca DataFrame: lastname, firstname, current_department,
     work_hours, shift, computed_hours. Nie dotyka bazy."""
     employees_list = []
 
     for filepath in filepaths:
-        data = pd.read_excel(filepath, header=None)
+        data = _pd().read_excel(filepath, header=None)
 
         if data.shape[1] < 6:
             raise ValueError(f"The file {filepath} does not contain enough columns (min. 6).")
@@ -83,7 +88,7 @@ def read_planning_excel(filepaths):
 
                 employees_list.append([lastname, firstname, dept, val_hours, shift])
 
-    employees_df = pd.DataFrame(
+    employees_df = _pd().DataFrame(
         employees_list,
         columns=["lastname", "firstname", "current_department", "work_hours", "shift"]
     )
@@ -110,14 +115,14 @@ def read_planning_excel(filepaths):
 
 def export_rows_to_excel(rows, filepath):
     """rows: lista list wartości w kolejności kolumn tabeli (bez kolumny Marked)."""
-    df = pd.DataFrame(rows, columns=col_names[1:])
+    df = _pd().DataFrame(rows, columns=col_names[1:])
     df.to_excel(filepath, index=False, sheet_name="Planning")
 
 
 def read_logins_excel(filepath):
     """Czyta spis loginów: szuka nagłówków 'Login:' i 'Name:' (najpierw w arkuszu 'Logins').
     Zwraca listę (nazwisko, login)."""
-    sheets = pd.read_excel(filepath, sheet_name=None, header=None, dtype=str)
+    sheets = _pd().read_excel(filepath, sheet_name=None, header=None, dtype=str)
     names = sorted(sheets, key=lambda n: 0 if n.strip().lower() == "logins" else 1)
 
     for sheet_name in names:
