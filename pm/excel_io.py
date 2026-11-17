@@ -1,4 +1,5 @@
 """Odczyt planu z plików Excel i eksport tabeli do Excela."""
+import re
 
 from .config import DEPARTMENT_ALIASES, DEPARTMENT_OVERRIDES, SPECIAL_FUNCTIONS, TEAM_LIST, col_names
 from .logic import (
@@ -164,29 +165,60 @@ def export_rows_to_excel(rows, filepath):
     df.to_excel(filepath, index=False, sheet_name="Planning")
 
 
+LOGIN_CODE = re.compile(r"^[A-Za-z]{1,2}(\d{1,4})[A-Za-z]{1,2}$")  # N012P, Z012P, R012R
+
+
+def normalize_login(value):
+    """'12', '012', 12.0 lub kod 'N012P' / 'R012R' -> '012'. Pusty tekst, gdy to nie login."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.endswith(".0"):
+        text = text[:-2]
+    match = LOGIN_CODE.match(text)
+    if match:
+        text = match.group(1)
+    if not text.isdigit() or int(text) == 0:
+        return ""
+    return f"{int(text):03d}"
+
+
 def read_logins_excel(filepath):
-    """Czyta spis loginów: szuka nagłówków 'Login:' i 'Name:' (najpierw w arkuszu 'Logins').
-    Zwraca listę (nazwisko, login)."""
+    """Czyta spis loginów i zwraca listę (nazwisko, login '012').
+
+    Obsługuje oba układy:
+    - plik z kodami (kolumny Naam / Noord 'N012P' / Zuid 'Z012P' / Reach 'R012R'),
+    - plik z kolumnami 'Login:' i 'Name:' (np. zakładka Logins).
+    """
     sheets = _pd().read_excel(filepath, sheet_name=None, header=None, dtype=str)
-    names = sorted(sheets, key=lambda n: 0 if n.strip().lower() == "logins" else 1)
+    names = sorted(sheets, key=lambda n: 0 if n.strip().lower() in ("logins", "inlognamen") else 1)
 
     for sheet_name in names:
         data = sheets[sheet_name]
         for r in range(min(len(data), 30)):
             cells = [str(v).strip().lower().rstrip(":") if isinstance(v, str) else "" for v in data.iloc[r]]
-            if "login" in cells and "name" in cells:
-                login_col, name_col = cells.index("login"), cells.index("name")
-                result = []
-                for i in range(r + 1, len(data)):
-                    login, name = data.iat[i, login_col], data.iat[i, name_col]
-                    if not isinstance(login, str) or not isinstance(name, str):
-                        continue
-                    login, name = login.strip(), name.strip()
-                    if login.endswith(".0"):
-                        login = login[:-2]
-                    login = login.lstrip("0") or "0"
-                    if name and name != "0" and login != "0":
-                        result.append((name, login))
+            name_col = next((i for i, c in enumerate(cells) if c in ("name", "naam")), None)
+            if name_col is None:
+                continue
+
+            code_cols = [i for i, c in enumerate(cells) if c in ("noord", "zuid", "reach")]
+            login_cols = [i for i, c in enumerate(cells) if c in ("login", "nummer", "nummer-1", "nr")]
+            if not code_cols and not login_cols:
+                continue
+
+            result = []
+            for i in range(r + 1, len(data)):
+                name = data.iat[i, name_col]
+                if not isinstance(name, str) or not name.strip() or name.strip() == "0":
+                    continue
+                login = ""
+                for col in code_cols + login_cols:
+                    login = normalize_login(data.iat[i, col])
+                    if login:
+                        break
+                if login:
+                    result.append((" ".join(name.split()), login))
+            if result:
                 return result
 
-    raise ValueError("No 'Login:' / 'Name:' columns found in this file.")
+    raise ValueError("No login list found (expected a 'Naam' / 'Name' column with login codes or numbers).")

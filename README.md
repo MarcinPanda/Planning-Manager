@@ -78,8 +78,9 @@ Ta sama aplikacja i baza, dodatkowo przełącznik Planning / Monitoring.
 - Tablica wszystkich działów; pracownik to kostka z nazwiskiem, loginem i godziną zmiany.
 - Przeciągnięcie na inny dział zapisuje zmianę działu z aktualną godziną.
 - Piking i Reach Outbound mają pozycje (klienci, strefy). Dla godzin liczy się tylko dział.
-- Jedna osoba może być w kilku pozycjach naraz: Ctrl + przeciągnięcie albo prawy przycisk na nazwisku.
-- „Import Logins" wczytuje spis loginów z Excela (kolumny `Login:` i `Name:`); loginy są
+- Działy ze strefami (Reach, Na-Nomi, Orderpick, Bufferzone) to tabele jak w Excelu: kliknięcie komórki
+  włącza / wyłącza strefę, jedna osoba może mieć kilka stref naraz.
+- „Import Logins" wczytuje spis loginów z Excela (plik Inlognamen z kodami N012P / R012R albo kolumny `Login:` i `Name:`); loginy są
   dopasowywane po nazwisku i zostają w bazie na kolejne dni.
 
 Budowanie: `.venv\Scripts\python -m PyInstaller Planning_Monitoring.spec --noconfirm --distpath dist --workpath build`

@@ -12,12 +12,14 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QMenu,
     QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -37,6 +39,26 @@ OTHER_ZONE = "Other / unknown"
 
 STATUS_COLORS = {"sick": ROW_COLOR_SICK, "home": ROW_COLOR_HOME, "late": ROW_COLOR_LATE}
 CHIP_COLOR = "#DCEBFF"
+POSITION_ON_COLOR = "#2ecc71"  # zielona komórka = osoba pracuje w tej strefie
+
+
+def login_tooltip(login):
+    if not login:
+        return "No login (use Import Logins)"
+    return f"Login {login}  ·  picking N{login}P / Z{login}P  ·  reach R{login}R"
+
+
+def employee_tooltip(emp):
+    since = emp.active_since
+    return (
+        f"{emp.lastname} {emp.firstname}\n"
+        f"Login: {emp.login or '-'}\n"
+        + (f"Zones: {', '.join(emp.positions)}\n" if emp.positions else "")
+        + f"Work hours: {emp.work_hours}\n"
+        f"Total: {emp.computed_hours} h\n"
+        f"Here since: {since or 'start of work'}"
+        + (f"\nInfo: {emp.info}" if emp.info else "")
+    )
 
 ZONE_STYLE = "DropZone { border: 1px solid #999; border-radius: 4px; }"
 ZONE_STYLE_HOVER = "DropZone { border: 2px solid #00BCff; border-radius: 4px; }"
@@ -46,7 +68,6 @@ class EmployeeList(QListWidget):
     """Lista kostek w jednej strefie. Obsługuje przeciąganie i upuszczanie."""
 
     dropped = Signal(list, str, bool)   # id pracowników, pozycja źródłowa, czy z Ctrl (dołóż)
-    context_requested = Signal(int, object)  # id pracownika, pozycja kursora na ekranie
     drag_state = Signal(bool)
     hover = Signal(bool)
 
@@ -123,18 +144,12 @@ class EmployeeList(QListWidget):
         if event.source() is not self:
             self.dropped.emit(ids, from_position, add)
 
-    def contextMenuEvent(self, event):
-        item = self.itemAt(event.pos())
-        if item is not None:
-            self.context_requested.emit(int(item.data(Qt.UserRole)), event.globalPos())
-
 
 class DropZone(QFrame):
     """Jedna strefa tablicy: dział albo pozycja (klient / strefa) wewnątrz działu."""
 
     move_requested = Signal(list, str, str, str, bool)  # ids, dział, pozycja, pozycja źródłowa, dołóż
     drag_state = Signal(bool)
-    context_requested = Signal(int, object)
 
     def __init__(self, title, department, position="", accepts_drops=True, parent=None):
         super().__init__(parent)
@@ -159,7 +174,6 @@ class DropZone(QFrame):
         self.list.dropped.connect(
             lambda ids, source, add: self.move_requested.emit(ids, self.department, self.position, source, add)
         )
-        self.list.context_requested.connect(self.context_requested)
         self.list.drag_state.connect(self.drag_state)
         self.list.hover.connect(lambda on: self.setStyleSheet(ZONE_STYLE_HOVER if on else ZONE_STYLE))
         layout.addWidget(self.list)
@@ -180,15 +194,7 @@ class DropZone(QFrame):
             item.setData(Qt.UserRole, emp.employee_id)
             item.setBackground(QBrush(QColor(STATUS_COLORS.get(emp.status, CHIP_COLOR))))
             item.setForeground(QBrush(QColor("#000000")))
-            item.setToolTip(
-                f"{emp.lastname} {emp.firstname}\n"
-                f"Login: {emp.login or '-'}\n"
-                + (f"Positions: {', '.join(emp.positions)}\n" if emp.positions else "")
-                + f"Work hours: {emp.work_hours}\n"
-                f"Total: {emp.computed_hours} h\n"
-                f"Here since: {since or 'start of work'}"
-                + (f"\nInfo: {emp.info}" if emp.info else "")
-            )
+            item.setToolTip(employee_tooltip(emp))
 
             if emp.status == "home":
                 # kto poszedł do domu, tego już nie przenosimy
@@ -200,8 +206,158 @@ class DropZone(QFrame):
         self.title_label.setText(f"{self.title}  ({count})" if count else self.title)
 
 
+class PositionTable(QTableWidget):
+    """Tabela działu ze strefami (jak zakładka Tools w Excelu).
+
+    Wiersz = pracownik, kolumny = strefy / klienci. Kliknięcie komórki włącza lub
+    wyłącza daną strefę – można zaznaczyć kilka naraz (godziny się nie zmieniają).
+    Nazwisko można przeciągnąć do innego działu; osobę z innego działu można tu
+    upuścić (na nazwisko = bez strefy, na kolumnę strefy = od razu w tej strefie).
+    """
+
+    FIXED_COLS = 2  # Name, Login
+    MIN_ROWS = 3
+
+    move_requested = Signal(list, str, str, str, bool)
+    toggle_position_requested = Signal(int, str)
+    drag_state = Signal(bool)
+
+    def __init__(self, department, positions, parent=None):
+        super().__init__(parent)
+        self.department = department
+        self.positions = positions
+        self.employees = []
+
+        self.setColumnCount(self.FIXED_COLS + len(positions))
+        self.setHorizontalHeaderLabels(["Name", "Login", *positions])
+        self.verticalHeader().setVisible(False)
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Fixed)
+        self.setColumnWidth(0, 220)
+        self.setColumnWidth(1, 60)
+        for col in range(self.FIXED_COLS, self.columnCount()):
+            header.setSectionResizeMode(col, QHeaderView.Stretch)
+            self.horizontalHeaderItem(col).setToolTip("Click a cell to switch this zone on / off")
+
+        self.cellClicked.connect(self._on_cell_clicked)
+        self.setRowCount(self.MIN_ROWS)
+        self._fit_height()
+
+    # ---------------------------------------------------------------- dane
+    def set_employees(self, employees):
+        self.employees = sorted(employees, key=lambda e: (e.firstname.casefold(), e.lastname.casefold()))
+        self.clearContents()
+        self.setRowCount(max(self.MIN_ROWS, len(self.employees)))
+
+        for row, emp in enumerate(self.employees):
+            status_color = STATUS_COLORS.get(emp.status)
+            since = emp.active_since
+
+            name = QTableWidgetItem(f"{emp.firstname} {emp.lastname}" + (f"  ·  {since}" if since else ""))
+            name.setData(Qt.UserRole, emp.employee_id)
+            name.setToolTip(employee_tooltip(emp))
+            name.setBackground(QBrush(QColor(status_color or CHIP_COLOR)))
+            name.setForeground(QBrush(QColor("#000000")))
+            self.setItem(row, 0, name)
+
+            login = QTableWidgetItem(emp.login)
+            login.setTextAlignment(Qt.AlignCenter)
+            login.setToolTip(login_tooltip(emp.login))
+            self.setItem(row, 1, login)
+
+            active = set(emp.positions)
+            for i, position in enumerate(self.positions):
+                cell = QTableWidgetItem("✓" if position in active else "")
+                cell.setTextAlignment(Qt.AlignCenter)
+                if position in active:
+                    cell.setBackground(QBrush(QColor(POSITION_ON_COLOR)))
+                    cell.setForeground(QBrush(QColor("#000000")))
+                cell.setToolTip(f"{position}: click to switch on / off")
+                self.setItem(row, self.FIXED_COLS + i, cell)
+
+        self._fit_height()
+
+    def _fit_height(self):
+        height = self.horizontalHeader().sizeHint().height() + 2 * self.frameWidth()
+        height += sum(self.rowHeight(r) for r in range(self.rowCount()))
+        height += self.horizontalScrollBar().sizeHint().height()  # miejsce na pasek przy wąskim oknie
+        self.setFixedHeight(height)
+
+    def employee_at(self, row):
+        return self.employees[row] if 0 <= row < len(self.employees) else None
+
+    def _on_cell_clicked(self, row, col):
+        emp = self.employee_at(row)
+        if emp is None or col < self.FIXED_COLS or emp.status == "home":
+            return
+        self.toggle_position_requested.emit(emp.employee_id, self.positions[col - self.FIXED_COLS])
+
+    # ------------------------------------------------------- przeciąganie
+    def startDrag(self, supported_actions):
+        rows = sorted({index.row() for index in self.selectedIndexes()})
+        ids = [
+            emp.employee_id
+            for emp in (self.employee_at(r) for r in rows)
+            if emp is not None and emp.status != "home"
+        ]
+        if not ids:
+            return
+
+        mime = QMimeData()
+        mime.setData(MIME_TYPE, json.dumps({"ids": ids, "from": ""}).encode("utf-8"))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+
+        self.drag_state.emit(True)
+        try:
+            drag.exec(Qt.MoveAction)
+        finally:
+            self.drag_state.emit(False)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(MIME_TYPE):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(MIME_TYPE):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasFormat(MIME_TYPE) or event.source() is self:
+            event.ignore()
+            return
+        try:
+            payload = json.loads(bytes(event.mimeData().data(MIME_TYPE)).decode("utf-8"))
+            ids = [int(i) for i in payload["ids"]]
+        except Exception:
+            event.ignore()
+            return
+
+        col = self.columnAt(event.position().toPoint().x())
+        event.acceptProposedAction()
+        self.handle_drop(ids, col)
+
+    def handle_drop(self, ids, col):
+        position = self.positions[col - self.FIXED_COLS] if col >= self.FIXED_COLS else ""
+        self.move_requested.emit(ids, self.department, position, "", False)
+
+
 class MonitoringView(QWidget):
-    """Tablica: Piking i Reach Outbound z pozycjami, pod spodem wszystkie pozostałe działy."""
+    """Tablica: działy ze strefami jako tabele (jak w Excelu), pod spodem wszystkie pozostałe działy."""
 
     move_requested = Signal(list, str, str, str, bool)
     toggle_position_requested = Signal(int, str)
@@ -211,8 +367,9 @@ class MonitoringView(QWidget):
 
         self.dragging = False
         self._signature = None
-        self.zones = {}        # (dział, pozycja) -> DropZone
-        self._by_id = {}
+        self.zones = {}        # dział -> DropZone (działy bez stref)
+        self.tables = {}       # dział -> PositionTable (działy ze strefami)
+        self.boxes = {}        # dział -> QGroupBox z tabelą
         self.other_zone = None
 
         outer = QVBoxLayout(self)
@@ -224,26 +381,30 @@ class MonitoringView(QWidget):
 
         container = QWidget()
         layout = QVBoxLayout(container)
+        scroll.setWidget(container)
 
         hint = QLabel(
-            "Drag = move  ·  Ctrl + drag = also work in that zone  ·  "
-            "Right-click a name = choose zones  ·  Ctrl / Shift + click = select several"
+            "Drag a name to another department = move (from now)  ·  "
+            "Click a zone cell = switch that zone on / off (several at once allowed)  ·  "
+            "Ctrl / Shift + click = select several names"
         )
         hint.setStyleSheet("color: #888;")
         layout.addWidget(hint)
-        scroll.setWidget(container)
 
-        # Działy z pozycjami (klienci / strefy)
+        # Działy ze strefami / klientami – tabele
         for dept, positions in SUB_POSITIONS.items():
-            box = QGroupBox(f"{SUB_POSITION_TITLES.get(dept, dept)}  –  {dept}")
-            row = QHBoxLayout(box)
-            row.setSpacing(4)
+            box = QGroupBox(self._box_title(dept, 0))
+            box_layout = QVBoxLayout(box)
+            box_layout.setContentsMargins(4, 4, 4, 4)
 
-            self._add_zone(row, DropZone("No position", dept, ""))
-            for position in positions:
-                self._add_zone(row, DropZone(position, dept, position))
+            table = PositionTable(dept, positions)
+            table.move_requested.connect(self.move_requested)
+            table.toggle_position_requested.connect(self.toggle_position_requested)
+            table.drag_state.connect(self._set_dragging)
+            self.tables[dept] = table
+            self.boxes[dept] = box
 
-            box.setMinimumHeight(170)
+            box_layout.addWidget(table)
             layout.addWidget(box)
 
         # Pozostałe działy – wszystkie naraz
@@ -255,7 +416,9 @@ class MonitoringView(QWidget):
         for index, dept in enumerate(others):
             zone = DropZone(dept, dept, "")
             zone.setMinimumHeight(100)
-            self._register(zone)
+            self.zones[dept] = zone
+            zone.move_requested.connect(self.move_requested)
+            zone.drag_state.connect(self._set_dragging)
             grid.addWidget(zone, index // MONITORING_GRID_COLUMNS, index % MONITORING_GRID_COLUMNS)
 
         # Działy spoza listy (np. nietypowa nazwa z Excela) – tylko do wyciągania
@@ -271,49 +434,22 @@ class MonitoringView(QWidget):
         layout.addWidget(grid_box)
         layout.addStretch()
 
-    def _add_zone(self, row_layout, zone):
-        self._register(zone)
-        row_layout.addWidget(zone)
-
-    def _register(self, zone):
-        self.zones[(zone.department, zone.position)] = zone
-        zone.move_requested.connect(self.move_requested)
-        zone.drag_state.connect(self._set_dragging)
-        zone.context_requested.connect(self._show_position_menu)
-
-    def _show_position_menu(self, emp_id, global_pos):
-        """Menu pod prawym przyciskiem: zaznaczanie stref / klientów, w których osoba pracuje."""
-        emp = self._by_id.get(emp_id)
-        if emp is None or emp.status == "home":
-            return
-        available = SUB_POSITIONS.get(emp.active_department)
-        if not available:
-            return
-
-        menu = QMenu(self)
-        current = emp.positions
-        for position in available:
-            action = menu.addAction(position)
-            action.setCheckable(True)
-            action.setChecked(position in current)
-            action.triggered.connect(
-                lambda _checked=False, p=position: self.toggle_position_requested.emit(emp_id, p)
-            )
-        menu.exec(global_pos)
+    @staticmethod
+    def _box_title(dept, count):
+        title = f"{SUB_POSITION_TITLES.get(dept, dept)}  –  {dept}"
+        return f"{title}  ({count})" if count else title
 
     def _set_dragging(self, state):
         self.dragging = state
 
-    def zone_keys_for(self, emp):
-        """W których strefach pokazać pracownika (pusta lista = strefa „Other").
-        Osoba pracująca w kilku strefach ma kostkę w każdej z nich."""
+    def place_of(self, emp):
+        """('table', dział) / ('zone', dział) / ('other', '') – gdzie pokazać pracownika."""
         dept = emp.active_department
-        keys = [(dept, p) for p in emp.positions if (dept, p) in self.zones]
-        if keys:
-            return keys
-        if (dept, "") in self.zones:
-            return [(dept, "")]
-        return []
+        if dept in self.tables:
+            return ("table", dept)
+        if dept in self.zones:
+            return ("zone", dept)
+        return ("other", "")
 
     def set_employees(self, employees, force=False):
         """Przebudowuje tablicę, ale tylko gdy coś się zmieniło (żeby nie migała co 10 s)."""
@@ -328,17 +464,23 @@ class MonitoringView(QWidget):
             return  # nie przebudowujemy w trakcie przeciągania; zrobi to następne odświeżenie
         self._signature = signature
 
-        groups = {key: [] for key in self.zones}
+        in_tables = {dept: [] for dept in self.tables}
+        in_zones = {dept: [] for dept in self.zones}
         other = []
-        self._by_id = {emp.employee_id: emp for emp in employees}
-        for emp in employees:
-            keys = self.zone_keys_for(emp)
-            if not keys:
-                other.append(emp)
-            for key in keys:
-                groups[key].append(emp)
 
-        for key, zone in self.zones.items():
-            zone.set_employees(groups[key])
+        for emp in employees:
+            kind, dept = self.place_of(emp)
+            if kind == "table":
+                in_tables[dept].append(emp)
+            elif kind == "zone":
+                in_zones[dept].append(emp)
+            else:
+                other.append(emp)
+
+        for dept, table in self.tables.items():
+            table.set_employees(in_tables[dept])
+            self.boxes[dept].setTitle(self._box_title(dept, len(in_tables[dept])))
+        for dept, zone in self.zones.items():
+            zone.set_employees(in_zones[dept])
         self.other_zone.set_employees(other, show_department=True)
         self.other_zone.setVisible(bool(other))

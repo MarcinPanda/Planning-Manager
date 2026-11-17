@@ -84,7 +84,7 @@ def test_move_is_undoable_and_position_resets(temp_db):
 def test_view_groups_employees_into_zones(app, temp_db):
     a = make_employee(lastname="Kowalski", department="Orderpicker")
     b = make_employee(lastname="Nowak", department="Reachtruck")
-    c = make_employee(lastname="Dijk", department="Buffer")
+    c = make_employee(lastname="Dijk", department="Laden")
     make_employee(lastname="Strange", department="Unknown")
     db.move_employees_in_db([a], "Orderpicker", "Pladis (22)", "09:00")
     db.move_employees_in_db([c], "Naar Huis", "", "12:00")
@@ -92,95 +92,127 @@ def test_view_groups_employees_into_zones(app, temp_db):
     view = MonitoringView()
     view.set_employees(db.load_employees_from_db())
 
-    def ids(key):
-        lst = view.zones[key].list
+    def zone_ids(dept):
+        lst = view.zones[dept].list
         return [lst.item(i).data(Qt.UserRole) for i in range(lst.count())]
 
-    assert ids(("Orderpicker", "Pladis (22)")) == [a]
-    assert ids(("Orderpicker", "")) == []
-    assert ids(("Reachtruck", "")) == [b]
-    assert ids(("Naar Huis", "")) == [c]
+    def table_ids(dept):
+        return [e.employee_id for e in view.tables[dept].employees]
+
+    assert table_ids("Orderpicker") == [a]
+    assert table_ids("Reachtruck") == [b]
+    assert zone_ids("Naar Huis") == [c]
     assert view.other_zone.list.count() == 1
 
+    # zielona komórka w kolumnie Pladis
+    table = view.tables["Orderpicker"]
+    col = table.FIXED_COLS + table.positions.index("Pladis (22)")
+    assert table.item(0, col).text() == "✓"
+    assert table.item(0, col - 1).text() == ""
+
     # kto poszedł do domu, tego nie da się przeciągnąć
-    home_item = view.zones[("Naar Huis", "")].list.item(0)
+    home_item = view.zones["Naar Huis"].list.item(0)
     assert not (home_item.flags() & Qt.ItemIsDragEnabled)
 
-    # upuszczenie na strefę wysyła prośbę o przeniesienie
     received = []
     view.move_requested.connect(lambda *args: received.append(args))
-    view.zones[("Reachtruck", "Zuid")].list.dropped.emit([a], "Pladis (22)", True)
-    assert received == [([a], "Reachtruck", "Zuid", "Pladis (22)", True)]
+    toggled = []
+    view.toggle_position_requested.connect(lambda *args: toggled.append(args))
+
+    # upuszczenie na kafel działu
+    view.zones["Laden"].list.dropped.emit([a], "", False)
+    # upuszczenie na kolumnę strefy w tabeli = przeniesienie od razu do tej strefy
+    reach = view.tables["Reachtruck"]
+    reach.handle_drop([a], reach.FIXED_COLS + reach.positions.index("Zuid"))
+    # upuszczenie na nazwisko = do działu bez strefy
+    reach.handle_drop([a], 0)
+    assert received == [
+        ([a], "Laden", "", "", False),
+        ([a], "Reachtruck", "Zuid", "", False),
+        ([a], "Reachtruck", "", "", False),
+    ]
+
+    # kliknięcie komórki strefy
+    table._on_cell_clicked(0, col)
+    table._on_cell_clicked(0, 0)  # klik w nazwisko nic nie przełącza
+    assert toggled == [(a, "Pladis (22)")]
 
 
 def test_several_zones_at_once(app, temp_db):
     emp_id = make_employee(department="Reachtruck")
 
-    db.move_employees_in_db([emp_id], "Reachtruck", "Noord", "09:00")
-    db.move_employees_in_db([emp_id], "Reachtruck", "Replenish", "09:05", from_position="Noord", add=True)
+    # klikanie komórek: kilka stref naraz
+    db.toggle_position_in_db(emp_id, "Noord")
+    db.toggle_position_in_db(emp_id, "Replenish")
     emp = _one()
     assert emp.positions == ["Noord", "Replenish"]
     assert emp.dept_times == [("Reachtruck", "")]   # godziny bez zmian
     assert emp.computed_hours == "8.00"
 
-    # kostka jest widoczna w obu strefach
     view = MonitoringView()
     view.set_employees(db.load_employees_from_db())
-    assert view.zones[("Reachtruck", "Noord")].list.count() == 1
-    assert view.zones[("Reachtruck", "Replenish")].list.count() == 1
-    assert view.zones[("Reachtruck", "")].list.count() == 0
+    table = view.tables["Reachtruck"]
+    marked = [p for i, p in enumerate(table.positions) if table.item(0, table.FIXED_COLS + i).text() == "✓"]
+    assert marked == ["Noord", "Replenish"]
 
-    # zwykłe przeciągnięcie kostki z Noord na Zuid zamienia tylko tę jedną strefę
-    db.move_employees_in_db([emp_id], "Reachtruck", "Zuid", "09:10", from_position="Noord")
-    assert _one().positions == ["Replenish", "Zuid"]
-
-    # menu pod prawym przyciskiem: włącz / wyłącz strefę
-    db.toggle_position_in_db(emp_id, "Kantel")
-    assert _one().positions == ["Replenish", "Zuid", "Kantel"]
-    db.toggle_position_in_db(emp_id, "Zuid")
-    assert _one().positions == ["Replenish", "Kantel"]
+    db.toggle_position_in_db(emp_id, "Noord")
+    assert _one().positions == ["Replenish"]
     db.undo_last()
-    assert _one().positions == ["Replenish", "Zuid", "Kantel"]
+    assert _one().positions == ["Noord", "Replenish"]
 
-    # upuszczenie na „No position" zdejmuje tylko strefę, z której przeciągano
-    db.move_employees_in_db([emp_id], "Reachtruck", "", "09:20", from_position="Kantel")
-    assert _one().positions == ["Replenish", "Zuid"]
+    # przeniesienie z innego działu prosto na strefę
+    other = make_employee(lastname="Other", department="Laden")
+    db.move_employees_in_db([other], "Reachtruck", "Kantel", "10:00")
+    moved = [e for e in db.load_employees_from_db() if e.employee_id == other][0]
+    assert (moved.active_department, moved.positions) == ("Reachtruck", ["Kantel"])
 
     # przejście do innego działu kasuje strefy
     db.move_employees_in_db([emp_id], "Laden", "", "10:00")
-    assert _one().positions == []
+    assert [e for e in db.load_employees_from_db() if e.employee_id == emp_id][0].positions == []
 
 
 def test_logins_import_and_matching(app, temp_db):
     import pandas as pd
+    from pm.excel_io import normalize_login
     from pm.logic import name_key
 
     assert name_key("Jan van", "Dijk") == name_key("jan VAN dijk")
     assert name_key("Łukasz", "Żółw") == name_key("lukasz zolw")
+    assert [normalize_login(x) for x in ["N012P", "Z012P", "R012R", "12", "012", "12.0", "0", "abc", None]] == \
+        ["012", "012", "012", "012", "012", "012", "", "", ""]
 
     make_employee(lastname="Dijk", firstname="Jan van")
     make_employee(lastname="Nowak", firstname="Ewa")
 
-    path = str(temp_db / "logins.xlsx")
-    rows = [[None, None, None], [None, "Login:", "Name:"], [None, "007", "Jan van Dijk"],
-            [None, "012", "Somebody Else"], [None, "0", "0"]]
-    with pd.ExcelWriter(path) as writer:
-        pd.DataFrame([["x"]]).to_excel(writer, sheet_name="Tools", header=False, index=False)
-        pd.DataFrame(rows).to_excel(writer, sheet_name="Logins", header=False, index=False)
+    # układ jak w pliku Inlognamen: Naam + kody N…P / Z…P / R…R
+    path = str(temp_db / "inlognamen.xlsx")
+    rows = [["R", "Nummer-1", "Naam", "Noord", "Zuid", "Reach"],
+            ["7", "7", "Jan van Dijk", "N007P", "Z007P", "R007R"],
+            ["12", "12", "Somebody Else", "N012P", "Z012P", "R012R"],
+            ["13", "13", None, "N013P", "Z013P", "R013R"]]
+    pd.DataFrame(rows).to_excel(path, sheet_name="Inlognamen", header=False, index=False)
 
     assert db.import_logins_from_excel(path) == (2, 1, 2)
 
     by_name = {e.lastname: e.login for e in db.load_employees_from_db()}
-    assert by_name == {"Dijk": "7", "Nowak": ""}
+    assert by_name == {"Dijk": "007", "Nowak": ""}
+
+    # starszy układ: zakładka Logins z kolumnami Login: / Name:
+    path2 = str(temp_db / "logins.xlsx")
+    rows2 = [[None, None, None], [None, "Login:", "Name:"], [None, "021", "Ewa Nowak"], [None, "0", "0"]]
+    with pd.ExcelWriter(path2) as writer:
+        pd.DataFrame([["x"]]).to_excel(writer, sheet_name="Tools", header=False, index=False)
+        pd.DataFrame(rows2).to_excel(writer, sheet_name="Logins", header=False, index=False)
+    assert db.import_logins_from_excel(path2) == (1, 2, 2)
 
     # loginy zostają po wyczyszczeniu listy i ponownym dodaniu osoby
     db.clear_all_data_in_db()
-    make_employee(lastname="Dijk", firstname="Jan van")
-    assert db.load_employees_from_db()[0].login == "7"
+    make_employee(lastname="Dijk", firstname="Jan van", department="Laden")
+    assert db.load_employees_from_db()[0].login == "007"
 
     view = MonitoringView()
     view.set_employees(db.load_employees_from_db())
-    assert "[7]" in view.zones[("Buffer", "")].list.item(0).text()
+    assert "[007]" in view.zones["Laden"].list.item(0).text()
 
 
 def test_main_window_with_monitoring(app, temp_db):
@@ -199,5 +231,5 @@ def test_main_window_with_monitoring(app, temp_db):
 
     window.view_toggle.setChecked(True)
     assert window.stack.currentIndex() == 1
-    assert window.monitoring_view.zones[("Orderpicker", "")].list.count() == 1
+    assert len(window.monitoring_view.tables["Orderpicker"].employees) == 1
     window.close()

@@ -72,13 +72,23 @@ ROW_COLOR_LATE = "#FFE2A8"
 
 # Monitoring: pozycje wewnątrz działu (klient / strefa). Dla godzin liczy się tylko dział.
 SUB_POSITIONS = {
+    "Reachtruck": ["Noord", "Zuid", "Replenish", "Consolidatie", "Kantel", "Extra", "Reflex"],
+    "Nanomi Reachtruck": ["Noord", "Zuid"],
     "Orderpicker": [
-        "Choco (12)", "Pladis (22)", "Grenade (24)", "Pieterciel (15)", "Nutricia (10)",
-        "Essity (14)", "Alpro (23)", "Petfood (13)", "ITR (18, 20)",
+        "Choco (12)", "Pladis (22)", "ITR (18 20)", "Riverside (21)", "Ferrero (27+28)", "Nutricia (10)",
+        "Petfood (13)", "Alpro (23)", "Essity (14)", "Pietercil (15)", "Tlant (25)", "Grenade",
     ],
-    "Reachtruck": ["Noord", "Zuid", "Replenish", "Consolidatie", "Kantel", "Extra"],
+    "Buffer": [
+        "Choco (12)", "Pladis (22)", "ITR (18 20)", "Ferrero (27/28)", "Nutricia (10)", "Essity (14)",
+        "Alpro (23)", "Petfood (13)", "Pietercil (15)", "Tlant (25)", "Grenade",
+    ],
 }
-SUB_POSITION_TITLES = {"Orderpicker": "Piking", "Reachtruck": "Reach Outbound"}
+SUB_POSITION_TITLES = {
+    "Reachtruck": "Outbound Reach",
+    "Nanomi Reachtruck": "Na-Nomi",
+    "Orderpicker": "Orderpick",
+    "Buffer": "Bufferzone",
+}
 MONITORING_GRID_COLUMNS = 8
 
 # Nazwy działów z planu w Excelu -> nazwy w aplikacji (klucze małymi literami)
