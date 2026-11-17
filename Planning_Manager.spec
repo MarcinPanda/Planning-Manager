@@ -1,8 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Build: pyinstaller Planning_Monitoring.spec --noconfirm
+# Build: pyinstaller Planning_Manager.spec --noconfirm
 
 a = Analysis(
-    ['planning_monitoring.py'],
+    ['planning_manager.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -36,7 +36,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='PlanningMonitoring',
+    name='PlanningManager',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

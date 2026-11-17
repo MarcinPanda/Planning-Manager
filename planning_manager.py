@@ -1,6 +1,6 @@
 """Planning Manager – punkt startowy (Planning + Monitoring + Consolidatie).
 
-Kod aplikacji jest w pakiecie pm/. Exe: pyinstaller Planning_Monitoring.spec --noconfirm
+Kod aplikacji jest w pakiecie pm/. Exe: pyinstaller Planning_Manager.spec --noconfirm
 """
 from pm import splash
 

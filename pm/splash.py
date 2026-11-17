@@ -3,7 +3,7 @@
 Exe w jednym pliku musi się przy każdym starcie rozpakować do folderu tymczasowego –
 to trwa najdłużej. PyInstaller pokazuje wtedy obrazek splash.png, a ten moduł
 dopisuje pod nim, który etap startu właśnie trwa. Przy uruchomieniu ze źródeł
-(python planning_monitoring.py) nic nie robi.
+(python planning_manager.py) nic nie robi.
 
 Moduł celowo nie importuje niczego ciężkiego.
 """

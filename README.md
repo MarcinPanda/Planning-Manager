@@ -8,16 +8,16 @@ przypisania do działów w ciągu dnia, przerwy i automatycznie liczone godziny.
 ```bash
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-dev.txt
-.venv\Scripts\python planning_monitoring.py
+.venv\Scripts\python planning_manager.py
 ```
 
 ## Budowanie exe
 
 ```bash
-.venv\Scripts\python -m PyInstaller Planning_Monitoring.spec --noconfirm --distpath dist --workpath build
+.venv\Scripts\python -m PyInstaller Planning_Manager.spec --noconfirm --distpath dist --workpath build
 ```
 
-Wynik: `dist\PlanningMonitoring.exe` (jeden plik, bez instalacji).
+Wynik: `dist\PlanningManager.exe` (jeden plik, bez instalacji).
 
 ## Testy
 
@@ -59,7 +59,7 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
 
 | Plik | Zawartość |
 | --- | --- |
-| `planning_monitoring.py` | punkt startowy |
+| `planning_manager.py` | punkt startowy |
 | `pm/config.py` | stałe: działy, zmiany, przerwy, kolory, wyjątki dla nazwisk |
 | `pm/logic.py` | liczenie godzin, przerwy, nazwiska, klasa `Employee` (bez Qt i bez bazy) |
 | `pm/db.py` | baza SQLite, dziennik zmian, cofanie, kopie zapasowe |
@@ -69,7 +69,6 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
 | `pm/widgets.py` | przełącznik, wątki robocze, delegat pola Info |
 | `pm/main_window.py` | główne okno |
 | `tests/` | testy automatyczne |
-| `Planning + Monitoring.py` | projekt poboczny (prototyp widoku Monitoring) – nie jest częścią aplikacji |
 
 ## Widok Monitoring
 
