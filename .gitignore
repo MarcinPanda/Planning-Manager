@@ -17,6 +17,7 @@ __pycache__/
 *.db
 *.db-journal
 *.xlsx
+*.xlsm
 sorting_state.txt
 backups/
 archive/
