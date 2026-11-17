@@ -176,6 +176,37 @@ def read_planning_excel(filepaths):
     return employees_df
 
 
+PLAN_DATE_RE = re.compile(r"^\s*(\d{1,2})[-./](\d{1,2})[-./](\d{4})\s*$")
+
+
+def read_plan_date(filepaths):
+    """Data zmiany z nagłówka planu (np. kolumna z „17-11-2026") jako 'YYYY-MM-DD'; None gdy brak."""
+    import datetime as _dt
+
+    import openpyxl
+    for path in filepaths:
+        try:
+            workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        except Exception:
+            continue
+        try:
+            for sheet in workbook.worksheets:
+                for row in sheet.iter_rows(min_row=1, max_row=25, values_only=True):
+                    for value in row:
+                        if isinstance(value, _dt.datetime):
+                            return value.date().isoformat()
+                        match = PLAN_DATE_RE.match(str(value)) if isinstance(value, str) else None
+                        if match:
+                            day, month, year = (int(g) for g in match.groups())
+                            try:
+                                return _dt.date(year, month, day).isoformat()
+                            except ValueError:
+                                pass
+        finally:
+            workbook.close()
+    return None
+
+
 def export_rows_to_excel(rows, filepath):
     """rows: lista list wartości w kolejności kolumn tabeli (bez kolumny Marked)."""
     df = _pd().DataFrame(rows, columns=col_names[1:])

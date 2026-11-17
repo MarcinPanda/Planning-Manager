@@ -27,16 +27,24 @@ Wynik: `dist\PlanningManager.exe` (jeden plik, bez instalacji).
 
 ## Gdzie są dane
 
-Wszystko leży w folderze, w którym jest exe (albo z którego uruchomiono skrypt):
+Folder z bazą ustawia plik `settings.ini` obok programu (⚙ → *Database location…*), np. folder na dysku
+sieciowym wspólny dla kilku komputerów. Bez tego pliku baza leży w folderze programu.
 
-| Co | Gdzie |
+| Co | Gdzie (w folderze bazy) |
 | --- | --- |
 | Baza danych | `planning_data.db` |
-| Kopie robione przy każdym starcie (10 ostatnich) | `backups\` |
-| Kopie robione przed „Clear Data" | `archive\` |
+| Kopie: przy starcie (10), co godzinę (24), przed zmianą układu bazy | `backups\` |
+| Kopie przed usunięciem zmiany (*Delete this shift…*) | `archive\` |
+
+- **Zmiany (dni):** import planu zapisuje ludzi do zmiany z pliku (data + Ochtend / Middag); poprzednie dni
+  zostają. Pole wyboru zmiany na górnym pasku.
+- **Kilka komputerów naraz:** program co 3 s sprawdza licznik zmian w bazie i odświeża tylko, gdy coś się
+  zmieniło; na dole widać, kto i kiedy zmienił ostatnio. Gdy ktoś inny zmienił te same osoby – komunikat zamiast
+  nadpisania. Ctrl+Z cofa tylko własne zmiany. Niedostępny dysk sieciowy = komunikat, nigdy pusta baza.
+- Układ bazy dla innych aplikacji: [docs/database.md](docs/database.md).
 
 Nową wersję exe wystarczy wgrać do tego samego folderu – baza zostaje.
-Stare bazy są uzupełniane automatycznie przy starcie.
+Stare bazy są przenoszone automatycznie przy starcie (z kopią w `backups\before_schema_v*`).
 
 Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repozytorium**
 (patrz `.gitignore`).

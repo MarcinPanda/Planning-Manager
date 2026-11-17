@@ -10,6 +10,13 @@ from pm import config, db, theme  # noqa: E402
 
 theme.persist = False   # testy nie zmieniają zapisanego motywu użytkownika
 
+# Zabezpieczenie: domyślna baza w testach to folder tymczasowy, nigdy prawdziwa planning_data.db
+# (nawet gdyby test cofnął podmianę ścieżki).
+import tempfile  # noqa: E402
+
+config.use_database_folder(tempfile.mkdtemp(prefix="pm-tests-"))
+config.SETTINGS_PATH = os.path.join(config.DB_FOLDER, "settings.ini")
+
 
 @pytest.fixture
 def temp_db(tmp_path, monkeypatch):
@@ -17,6 +24,7 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setattr(config, "BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setattr(config, "ARCHIVE_DIR", str(tmp_path / "archive"))
+    monkeypatch.setattr(db, "current_shift_id", None)
     db.init_db()
     return tmp_path
 

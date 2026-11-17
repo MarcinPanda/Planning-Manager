@@ -5,7 +5,48 @@ import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 BASE_DIR = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.getcwd()
-DB_PATH = os.path.join(BASE_DIR, "planning_data.db")
+
+# Gdzie leży baza: plik settings.ini obok programu, sekcja [database], klucz folder
+# (np. folder na dysku sieciowym wspólny dla wszystkich komputerów). Brak pliku = folder programu.
+SETTINGS_PATH = os.path.join(BASE_DIR, "settings.ini")
+DB_FILENAME = "planning_data.db"
+
+
+def read_database_folder():
+    import configparser
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(SETTINGS_PATH, encoding="utf-8")
+        folder = parser.get("database", "folder", fallback="").strip()
+    except Exception:
+        folder = ""
+    return folder or BASE_DIR
+
+
+def write_database_folder(folder):
+    import configparser
+    parser = configparser.ConfigParser()
+    parser.read(SETTINGS_PATH, encoding="utf-8")
+    if not parser.has_section("database"):
+        parser.add_section("database")
+    parser.set("database", "folder", folder)
+    with open(SETTINGS_PATH, "w", encoding="utf-8") as handle:
+        handle.write("; Planning Manager – folder ze wspólną bazą (np. dysk sieciowy)\n")
+        parser.write(handle)
+
+
+def use_database_folder(folder):
+    """Ustawia ścieżki bazy, kopii i archiwum na podany folder."""
+    global DB_FOLDER, DB_PATH, BACKUP_DIR, ARCHIVE_DIR
+    DB_FOLDER = folder
+    DB_PATH = os.path.join(folder, DB_FILENAME)
+    BACKUP_DIR = os.path.join(folder, "backups")   # kopie robione przy starcie i co godzinę
+    ARCHIVE_DIR = os.path.join(folder, "archive")  # kopie robione przed usunięciem zmiany
+
+
+DB_FOLDER = DB_PATH = BACKUP_DIR = ARCHIVE_DIR = ""
+use_database_folder(read_database_folder())
+REFRESH_CHECK_MS = 3_000   # co tyle sprawdzamy, czy ktoś inny coś zmienił
 SYNC_INTERVAL_MS = 10_000  # auto-odświeżanie tabeli
 
 NAME_EXCEPTIONS = ["van", "vas", "dos", "al"]
@@ -59,9 +100,8 @@ DEPARTMENT_OVERRIDES = [
 # Działy liczone jako 0 h
 ZERO_HOUR_DEPARTMENTS = ["ziek", "naar huis"]
 
-BACKUP_DIR = os.path.join(BASE_DIR, "backups")   # kopie robione przy starcie
-ARCHIVE_DIR = os.path.join(BASE_DIR, "archive")  # kopie robione przed "Clear Data"
 BACKUP_KEEP = 10   # ile ostatnich kopii startowych trzymamy
+HOURLY_BACKUP_KEEP = 24   # kopie co godzinę (ostatnia doba)
 UNDO_DEPTH = 30    # ile ostatnich operacji da się cofnąć
 LOG_KEEP = 5000    # ile wpisów dziennika trzymamy
 

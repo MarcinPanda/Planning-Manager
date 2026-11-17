@@ -56,7 +56,7 @@ Zasady:
 - [x] Pasek u góry z ikonkami i menu rozwijanymi (Import ▾, ⋯).
 - Decyzja: zostajemy przy PySide6 (Qt). Wygląd zmieniamy stylem i ikonami.
 
-## Etap 3 – wspólna baza na dysku sieciowym (fundament)
+## Etap 3 – wspólna baza na dysku sieciowym (fundament) ✅ (zrobione 17.11 – do testu na dysku sieciowym w pracy)
 
 Cel: kilka komputerów naraz (helpdesk, steering) pracuje na tych samych danych, offline, bez przycisku „Sync".
 

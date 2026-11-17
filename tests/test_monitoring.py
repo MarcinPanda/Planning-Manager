@@ -156,7 +156,7 @@ def test_only_one_zone_has_a_selection(app, temp_db):
     laden.item(0).setSelected(True)
     buffer.item(0).setSelected(True)
     assert not laden.selectedItems() and buffer.selectedItems()   # poprzednie zaznaczenie znika
-    assert (a, b)
+    assert a and b
 
 
 def test_halls(app, temp_db):

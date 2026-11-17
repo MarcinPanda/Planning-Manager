@@ -44,7 +44,9 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QKeySequence, QPageLayout, QPixmap, QShortcut, QTextDocument
 from PySide6.QtPrintSupport import QPrintPreviewDialog, QPrinter
 
-from . import db, theme
+import os
+
+from . import config, db, theme
 from .config import ROW_COLOR_HOME, ROW_COLOR_LATE, ROW_COLOR_SICK, SYNC_INTERVAL_MS, col_names, columns
 from .excel_io import export_rows_to_excel
 from .dialogs import (
@@ -167,16 +169,26 @@ class MainWindow(QMainWindow):
         self.context_menu.addAction("Remove Department", self.remove_department)
         self.context_menu.addAction("Late", self.mark_as_late)
 
+        # pasek stanu: gdzie jest baza i kto ostatnio coś zmienił (praca kilku komputerów naraz)
+        self.last_change_label = QLabel("")
+        self.last_change_label.setObjectName("muted")
+        self.statusBar().addPermanentWidget(self.last_change_label)
+        self._last_counter = None
+
         self.refresh_data()
 
-        # Auto-synchronizacja co 10 s (z Planning.py) – pomijana podczas edycji Info
-        # lub gdy w tle trwa inna operacja na bazie.
         # Ciężkie biblioteki do Excela doczytujemy w tle, gdy okno już działa.
         QTimer.singleShot(1500, self._warm_up_excel)
 
+        # Co kilka sekund tanie sprawdzenie licznika zmian w bazie; odświeżamy tylko, gdy ktoś coś zmienił.
         self.sync_timer = QTimer(self)
         self.sync_timer.timeout.connect(self.auto_refresh)
-        self.sync_timer.start(SYNC_INTERVAL_MS)
+        self.sync_timer.start(config.REFRESH_CHECK_MS)
+
+        # Kopia bazy co godzinę (jedna na godzinę, nawet przy kilku komputerach)
+        self.backup_timer = QTimer(self)
+        self.backup_timer.timeout.connect(lambda: self.run_db_task(lambda: db.backup_db("hourly")))
+        self.backup_timer.start(15 * 60 * 1000)
 
     def _warm_up_excel(self):
         import threading
@@ -186,15 +198,57 @@ class MainWindow(QMainWindow):
         threading.Thread(target=warm_up, name="excel-warm-up", daemon=True).start()
 
     def auto_refresh(self):
+        """Odświeżenie tylko wtedy, gdy w bazie coś się zmieniło (np. na innym komputerze)."""
         if self.is_editing_info or self._active_threads:
             return
-        if self.monitoring_view is not None and self.monitoring_view.dragging:
+        if self.monitoring_view.dragging or self.consolidation_view.busy:
             return
-        self.refresh_data()
+        try:
+            counter, last = db.change_state()
+        except Exception as exc:   # dysk sieciowy chwilowo niedostępny
+            self.last_change_label.setText(f"⚠ Database not reachable: {exc}")
+            return
+        self._show_last_change(last)
+        if counter != self._last_counter:
+            self.refresh_data()
+
+    def _show_last_change(self, last):
+        where = config.DB_FOLDER
+        text = f"Database: {where}"
+        if last:
+            ts, user, action = last
+            text += f"   ·   last change {ts[11:16]} by {user} ({action})"
+        self.last_change_label.setText(text)
 
     def sync_now(self):
-        self.sync_timer.start(SYNC_INTERVAL_MS)  # restart odliczania
         self.refresh_data()
+
+    def _guarded(self, employee_ids, task):
+        """Zadanie, które najpierw sprawdza, czy nikt inny nie zmienił tych osób od ostatniego wczytania."""
+        wanted = set(employee_ids)
+        expected = {e.employee_id: e.fingerprint for e in self.model.all_employees
+                    if e.employee_id in wanted and getattr(e, "fingerprint", None)}
+
+        def run():
+            db.assert_unchanged(expected)
+            return task()
+        return run
+
+    def _db_error(self, message):
+        """Czytelne komunikaty dla pracy kilku komputerów na wspólnej bazie."""
+        if message.startswith("Someone else") or message.startswith("Cannot undo"):
+            QMessageBox.warning(self, "Changed by someone else", message)
+            self.refresh_data()
+        elif "locked" in message.lower() or "busy" in message.lower():
+            QMessageBox.warning(self, "Database busy",
+                                "Another computer is saving to the shared database right now.\n"
+                                "Nothing was changed – please try again in a moment.")
+        elif "unable to open" in message.lower() or "disk i/o" in message.lower():
+            QMessageBox.critical(self, "Database not reachable",
+                                 f"The database could not be opened:\n{config.DB_PATH}\n\n"
+                                 "Check the network drive connection.\n\n" + message)
+        else:
+            QMessageBox.critical(self, "Database Error", message)
 
     def set_controls_enabled(self, enabled):
         for control in (self.load_action, self.clear_action, self.add_emp_action, self.remove_emp_action,
@@ -235,7 +289,7 @@ class MainWindow(QMainWindow):
         def error_handler(message):
             thread.quit()
             self.set_controls_enabled(True)
-            QMessageBox.critical(self, "Database Error", message)
+            self._db_error(message)
 
         relay = MainThreadRelay(finished_handler, error_handler, self)
         worker.finished.connect(relay.finished, Qt.QueuedConnection)
@@ -252,6 +306,11 @@ class MainWindow(QMainWindow):
 
         selected_ids = [emp.employee_id for emp in self.selected_employees()]
         scroll_value = self.table.verticalScrollBar().value()
+        try:
+            self._last_counter, last = db.change_state()
+            self._show_last_change(last)
+        except Exception:
+            pass
 
         self.set_controls_enabled(False)
 
@@ -285,13 +344,14 @@ class MainWindow(QMainWindow):
                 print(f"Consolidation refresh failed: {exc}")
             self.restore_selection(selected_ids)
             self.table.verticalScrollBar().setValue(scroll_value)
+            self._refresh_shifts()
             self.set_controls_enabled(True)
             thread.quit()
 
         def on_error(message):
             thread.quit()
             self.set_controls_enabled(True)
-            QMessageBox.critical(self, "Database Error", message)
+            self._db_error(message)
 
         relay = MainThreadRelay(on_finished, on_error, self)
         worker.finished.connect(relay.finished, Qt.QueuedConnection)
@@ -477,6 +537,16 @@ class MainWindow(QMainWindow):
         self.count_label.setObjectName("muted")
         self.count_label.setToolTip("Employees on the list (shown / all)")
         layout.addWidget(self.count_label)
+        layout.addSpacing(14)
+
+        # Która zmiana (data + Ochtend / Middag) – poprzednie dni zostają w bazie
+        self.shift_combo = QComboBox()
+        self.shift_combo.setMinimumWidth(260)
+        self.shift_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.shift_combo.setToolTip("Shift shown in this window. Importing a plan creates / fills its shift;\n"
+                                    "earlier days stay in the database.")
+        self.shift_combo.activated.connect(self._shift_chosen)
+        layout.addWidget(self.shift_combo)
         layout.addStretch()
 
         self.toggle_mark_button = self._tool(
@@ -514,11 +584,12 @@ class MainWindow(QMainWindow):
             ])
         layout.addWidget(self.export_button)
 
-        self.more_button, (self.theme_action, self.clear_action) = self._menu_tool(
+        self.more_button, (self.theme_action, self.db_action, self.clear_action) = self._menu_tool(
             "settings", "", [
                 ("settings", "Switch to light theme", self.toggle_theme),
+                ("database", "Database location…", self.choose_database_folder),
                 None,
-                ("clear", "Clear data…", self.clear_data),
+                ("clear", "Delete this shift…", self.clear_data),
             ], "More")
         self.more_button.setText("")
         self.more_button.setToolButtonStyle(Qt.ToolButtonIconOnly)
@@ -534,6 +605,72 @@ class MainWindow(QMainWindow):
         self.toggle_mark_button.setVisible(planning)
         if hasattr(self, "legend_widget"):
             self.legend_widget.setVisible(planning)
+
+    def _refresh_shifts(self):
+        """Lista zmian w polu wyboru (bez wywoływania zmiany przez użytkownika)."""
+        try:
+            shifts = db.list_shifts()
+            current = db.resolved_shift()
+        except Exception:
+            return
+        current_id = current[0] if current else None
+        self.shift_combo.blockSignals(True)
+        self.shift_combo.clear()
+        for shift_id, shift_date, name, count in shifts:
+            try:
+                label_date = datetime.strptime(shift_date, "%Y-%m-%d").strftime("%a %d-%m-%Y")
+            except ValueError:
+                label_date = shift_date
+            self.shift_combo.addItem(f"{label_date}  ·  {name}  ({count})", shift_id)
+        if not shifts:
+            self.shift_combo.addItem("No shift yet – import a plan", None)
+        index = self.shift_combo.findData(current_id)
+        self.shift_combo.setCurrentIndex(max(0, index))
+        self.shift_combo.blockSignals(False)
+
+    def _shift_chosen(self, index):
+        shift_id = self.shift_combo.itemData(index)
+        if shift_id is None:
+            return
+        db.current_shift_id = shift_id
+        self.refresh_data()
+
+    def choose_database_folder(self):
+        """Folder ze wspólną bazą (np. dysk sieciowy) – zapisany w settings.ini obok programu."""
+        reply = QMessageBox.question(
+            self, "Database location",
+            f"Current database:\n{config.DB_PATH}\n\nChoose another folder (e.g. on the network drive)?\n"
+            "If the folder has no database yet, the current one can be copied there.",
+        )
+        if reply != QMessageBox.Yes:
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Folder for the shared database", config.DB_FOLDER)
+        if not folder or os.path.normcase(folder) == os.path.normcase(config.DB_FOLDER):
+            return
+        target = os.path.join(folder, config.DB_FILENAME)
+        if not os.path.exists(target):
+            copy = QMessageBox.question(
+                self, "Database location",
+                f"There is no database in:\n{folder}\n\nCopy the current database there?\n"
+                "(No = start there with an empty database)",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            )
+            if copy == QMessageBox.Cancel:
+                return
+            if copy == QMessageBox.Yes:
+                try:
+                    import shutil
+                    shutil.copy2(config.DB_PATH, target)
+                except OSError as exc:
+                    QMessageBox.critical(self, "Database location", f"Copy failed:\n{exc}")
+                    return
+        try:
+            config.write_database_folder(folder)
+        except OSError as exc:
+            QMessageBox.critical(self, "Database location", f"Could not save settings.ini:\n{exc}")
+            return
+        QMessageBox.information(self, "Database location",
+                                f"Saved. Restart the program to use:\n{target}")
 
     def _update_theme_action(self):
         dark = theme.current_name == "dark"
@@ -595,7 +732,8 @@ class MainWindow(QMainWindow):
         self.run_db_task(lambda: db.import_consolidation_from_excel(filepath), on_finished=done, refresh_after=True)
 
     def toggle_position(self, employee_id, position):
-        self.run_db_task(lambda: db.toggle_position_in_db(employee_id, position), refresh_after=True)
+        self.run_db_task(self._guarded([employee_id], lambda: db.toggle_position_in_db(employee_id, position)),
+                         refresh_after=True)
 
     def import_logins(self):
         filepath, _ = QFileDialog.getOpenFileName(
@@ -623,9 +761,9 @@ class MainWindow(QMainWindow):
 
         from_start = self.monitoring_view.from_start
         self.run_db_task(
-            lambda: db.move_employees_in_db(
+            self._guarded(employee_ids, lambda: db.move_employees_in_db(
                 employee_ids, department, position, from_position=from_position, add=add, from_start=from_start
-            ),
+            )),
             on_finished=self._show_errors,
             refresh_after=True,
         )
@@ -649,7 +787,8 @@ class MainWindow(QMainWindow):
             return
         time_chosen, all_day = dialog.values()
         self.run_db_task(
-            lambda: db.leave_work_in_db(employee_ids, kind, time_chosen, all_day=all_day),
+            self._guarded(employee_ids, lambda: db.leave_work_in_db(employee_ids, kind, time_chosen,
+                                                                    all_day=all_day)),
             on_finished=self._show_errors,
             refresh_after=True,
         )
@@ -659,7 +798,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted or not dialog.selected_ids():
             return
         ids, time_chosen = dialog.selected_ids(), dialog.value()
-        self.run_db_task(lambda: db.leave_work_in_db(ids, "home", time_chosen),
+        self.run_db_task(self._guarded(ids, lambda: db.leave_work_in_db(ids, "home", time_chosen)),
                          on_finished=self._show_errors, refresh_after=True)
 
     def monitoring_action(self, action, employee_ids):
@@ -673,16 +812,18 @@ class MainWindow(QMainWindow):
                                 current if current.isValid() else None, self)
             if dialog.exec() == QDialog.Accepted:
                 time_chosen = dialog.value()
-                self.run_db_task(lambda: db.change_leave_time_in_db(employee_ids, time_chosen),
+                self.run_db_task(self._guarded(employee_ids,
+                                               lambda: db.change_leave_time_in_db(employee_ids, time_chosen)),
                                  on_finished=self._show_errors, refresh_after=True)
         elif action == "back":
-            self.run_db_task(lambda: db.back_to_work_in_db(employee_ids),
+            self.run_db_task(self._guarded(employee_ids, lambda: db.back_to_work_in_db(employee_ids)),
                              on_finished=self._show_errors, refresh_after=True)
         elif action == "zones":
             dialog = ZonePickerDialog(people[0], self)
             if dialog.exec() == QDialog.Accepted:
                 positions, emp_id = dialog.positions(), people[0].employee_id
-                self.run_db_task(lambda: db.set_positions_in_db(emp_id, positions), refresh_after=True)
+                self.run_db_task(self._guarded([emp_id], lambda: db.set_positions_in_db(emp_id, positions)),
+                                 refresh_after=True)
 
     def update_count_label(self):
         shown = len(self.model.employees)
@@ -794,7 +935,7 @@ class MainWindow(QMainWindow):
 
         if reply == QMessageBox.Yes:
             self.run_db_task(
-                lambda: db.delete_employees_from_db(employee_ids),
+                self._guarded(employee_ids, lambda: db.delete_employees_from_db(employee_ids)),
                 refresh_after=True
             )
 
@@ -833,11 +974,11 @@ class MainWindow(QMainWindow):
                     QMessageBox.warning(self, "Warning", "\n".join(errors))
 
             self.run_db_task(
-                lambda: db.add_departments_to_db(
+                self._guarded(data["employee_ids"], lambda: db.add_departments_to_db(
                     data["employee_ids"],
                     data["department"],
                     data["time"],
-                ),
+                )),
                 on_finished=done,
                 refresh_after=True,
             )
@@ -854,7 +995,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Warning", "\n".join(errors))
 
         self.run_db_task(
-            lambda: db.remove_last_departments_from_db(employee_ids),
+            self._guarded(employee_ids, lambda: db.remove_last_departments_from_db(employee_ids)),
             on_finished=done,
             refresh_after=True,
         )
@@ -871,10 +1012,10 @@ class MainWindow(QMainWindow):
         if dlg.exec() and dlg.result_data:
             data = dlg.result_data
             self.run_db_task(
-                lambda: db.edit_departments_in_db(
+                self._guarded(data["employee_ids"], lambda: db.edit_departments_in_db(
                     data["employee_ids"],
                     data["department"],
-                ),
+                )),
                 refresh_after=True,
             )
 
@@ -903,7 +1044,7 @@ class MainWindow(QMainWindow):
 
         # jedno zadanie w tle dla wszystkich osób, błędy wracają przez on_finished
         self.run_db_task(
-            lambda: db.mark_employees_late_in_db(items),
+            self._guarded([i for i, _ in items], lambda: db.mark_employees_late_in_db(items)),
             on_finished=done,
             refresh_after=True,
         )

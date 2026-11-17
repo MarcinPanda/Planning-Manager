@@ -12,7 +12,7 @@ import sqlite3
 from datetime import date, datetime, timedelta
 
 from . import config
-from .excel_io import read_consolidation_excel, read_logins_excel, read_planning_excel
+from .excel_io import read_consolidation_excel, read_logins_excel, read_plan_date, read_planning_excel
 from .logic import (
     Employee,
     Validator,
@@ -27,13 +27,22 @@ from .logic import (
 
 EMP_COLS = (
     "id, lastname, firstname, current_department, work_hours, shift, "
-    "computed_hours, marked, info, custom_breaks, late, position, planned_hours"
+    "computed_hours, marked, info, custom_breaks, late, position, planned_hours, shift_id"
 )
+
+SCHEMA_VERSION = 2   # 2 = zmiany (shifts), licznik zmian, praca kilku komputerów na jednej bazie
 
 try:
     USER = getpass.getuser()
 except Exception:
     USER = "unknown"
+
+# Która zmiana jest pokazywana w tym oknie (None = najnowsza). Każdy komputer wybiera sam.
+current_shift_id = None
+
+
+class ConflictError(Exception):
+    """Ktoś inny zmienił te same osoby po tym, jak je wczytaliśmy."""
 
 
 ###############################################################################
@@ -41,14 +50,70 @@ except Exception:
 ###############################################################################
 
 def get_connection():
-    conn = sqlite3.connect(config.DB_PATH, timeout=10)
+    # Baza może leżeć na dysku sieciowym i być używana przez kilka komputerów naraz:
+    # czekamy do 30 s, gdy inny komputer akurat zapisuje (blokada pliku).
+    conn = sqlite3.connect(config.DB_PATH, timeout=30)
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
+def schema_version():
+    conn = get_connection()
+    try:
+        return conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _migrate(cursor):
+    """Przenosi starszą bazę do bieżącego układu (SCHEMA_VERSION). Kopia bazy jest robiona wcześniej."""
+    version = cursor.execute("PRAGMA user_version").fetchone()[0]
+    if version < 2:
+        # Zmiany: (data, nazwa zmiany). Dotychczasowi pracownicy trafiają do jednej zmiany z dzisiejszą datą.
+        columns_db = [c[1] for c in cursor.execute("PRAGMA table_info(employees)")]
+        if "shift_id" not in columns_db:
+            cursor.execute("ALTER TABLE employees ADD COLUMN shift_id INTEGER")
+        orphans = cursor.execute("SELECT shift FROM employees WHERE shift_id IS NULL").fetchall()
+        if orphans:
+            name = _shift_name([r[0] for r in orphans])
+            shift_id = _ensure_shift(cursor, date.today().isoformat(), name)
+            cursor.execute("UPDATE employees SET shift_id = ? WHERE shift_id IS NULL", (shift_id,))
+    cursor.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _create_change_tracking(cursor):
+    """Licznik zmian (meta.changes) podbijany przez wyzwalacze – inne komputery po nim poznają,
+    że trzeba odświeżyć widok."""
+    cursor.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)")
+    cursor.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('changes', 0)")
+    for table in ("employees", "departments", "consolidation", "logins", "shifts"):
+        for event in ("INSERT", "UPDATE", "DELETE"):
+            cursor.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS trg_{table}_{event.lower()} AFTER {event} ON {table}
+                BEGIN UPDATE meta SET value = value + 1 WHERE key = 'changes'; END
+            """)
+
+
 def init_db():
+    if os.path.exists(config.DB_PATH) and os.path.getsize(config.DB_PATH) > 0 \
+            and schema_version() < SCHEMA_VERSION:
+        _copy_db_to(config.BACKUP_DIR, f"before_schema_v{SCHEMA_VERSION}")   # kopia przed przeniesieniem
     conn = get_connection()
     cursor = conn.cursor()
+    # Na dysku sieciowym tylko klasyczny dziennik (WAL nie działa przez udział sieciowy).
+    cursor.execute("PRAGMA journal_mode = DELETE")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS shifts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            name TEXT NOT NULL,
+            created TEXT DEFAULT '',
+            created_by TEXT DEFAULT '',
+            UNIQUE (date, name)
+        )
+    """)
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS employees (
@@ -169,11 +234,141 @@ def init_db():
             if merged != value:
                 cursor.execute(f"UPDATE {table} SET {column} = ? WHERE {key} = ?", (merged, row_id))
 
+    _migrate(cursor)
+    _create_change_tracking(cursor)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_departments_employee_id ON departments(employee_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_employees_name ON employees(lastname, firstname)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_employees_shift ON employees(shift_id)")
 
     conn.commit()
     conn.close()
+
+
+###############################################################################
+# Shifts (data + zmiana) – kolejny dzień nie kasuje poprzedniego
+###############################################################################
+
+SHIFT_ORDER = {"Ochtend": 0, "Day8to17": 1, "Middag": 2}
+
+
+def _shift_name(names):
+    """Nazwa zmiany z planu: najczęstsza (Day8to17 należy do zmiany porannej)."""
+    counter = collections.Counter("Ochtend" if n == "Day8to17" else (n or "") for n in names)
+    counter.pop("", None)
+    counter.pop("Custom", None)
+    return counter.most_common(1)[0][0] if counter else "Ochtend"
+
+
+def _ensure_shift(cursor, shift_date, name):
+    row = cursor.execute("SELECT id FROM shifts WHERE date = ? AND name = ?", (shift_date, name)).fetchone()
+    if row:
+        return row[0]
+    cursor.execute(
+        "INSERT INTO shifts (date, name, created, created_by) VALUES (?, ?, ?, ?)",
+        (shift_date, name, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), USER),
+    )
+    return cursor.lastrowid
+
+
+def list_shifts():
+    """[(id, data, nazwa, liczba osób)] – najnowsze pierwsze."""
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT s.id, s.date, s.name, COUNT(e.id) FROM shifts s
+            LEFT JOIN employees e ON e.shift_id = s.id
+            GROUP BY s.id
+        """).fetchall()
+    finally:
+        conn.close()
+    return sorted(rows, key=lambda r: (r[1], SHIFT_ORDER.get(r[2], 9), r[0]), reverse=True)
+
+
+def _resolve_shift(cursor):
+    """Id zmiany pokazywanej w tym oknie: wybrana albo najnowsza; None gdy nie ma żadnej."""
+    if current_shift_id is not None:
+        if cursor.execute("SELECT 1 FROM shifts WHERE id = ?", (current_shift_id,)).fetchone():
+            return current_shift_id
+    rows = cursor.execute("SELECT id, date, name FROM shifts").fetchall()
+    if not rows:
+        return None
+    return max(rows, key=lambda r: (r[1], SHIFT_ORDER.get(r[2], 9), r[0]))[0]
+
+
+def resolved_shift():
+    """(id, data, nazwa) zmiany pokazywanej w tym oknie albo None."""
+    conn = get_connection()
+    try:
+        shift_id = _resolve_shift(conn.cursor())
+        if shift_id is None:
+            return None
+        return conn.execute("SELECT id, date, name FROM shifts WHERE id = ?", (shift_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def _current_or_new_shift(cursor, shift_name="Ochtend"):
+    shift_id = _resolve_shift(cursor)
+    if shift_id is None:
+        shift_id = _ensure_shift(cursor, date.today().isoformat(), shift_name)
+    return shift_id
+
+
+def _recent_shift_ids(cursor):
+    """Zmiany z ostatnich dni – dla nich RIT-y z listy konsolidacji zmieniają strefy reacherów."""
+    since = (date.today() - timedelta(days=config.CONSOLIDATION_ACTIVE_DAYS)).isoformat()
+    return [r[0] for r in cursor.execute("SELECT id FROM shifts WHERE date >= ?", (since,)).fetchall()]
+
+
+###############################################################################
+# Changes from other computers / conflicts
+###############################################################################
+
+def change_state():
+    """(licznik zmian, ostatni wpis dziennika: (czas, kto, akcja) albo None) – tanie zapytanie co kilka sekund."""
+    conn = get_connection()
+    try:
+        counter = conn.execute("SELECT value FROM meta WHERE key = 'changes'").fetchone()
+        last = conn.execute(
+            "SELECT ts, user, action FROM change_log WHERE action != 'Undo' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return (counter[0] if counter else 0), last
+    finally:
+        conn.close()
+
+
+def _fingerprint_row(row, departments):
+    return json.dumps([list(row), [list(d) for d in departments]], default=str)
+
+
+def assert_unchanged(expected):
+    """expected = {id pracownika: odcisk z chwili wczytania}. Gdy ktoś w międzyczasie zmienił którąś
+    z tych osób (inny komputer), rzuca ConflictError zamiast nadpisywać jego zmianę."""
+    if not expected:
+        return
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        changed = []
+        for emp_id, fingerprint in expected.items():
+            row = cursor.execute(f"SELECT {EMP_COLS} FROM employees WHERE id = ?", (emp_id,)).fetchone()
+            if row is None:
+                changed.append(f"ID {emp_id} (removed)")
+                continue
+            depts = cursor.execute(
+                "SELECT department, time_assigned FROM departments WHERE employee_id = ? ORDER BY id", (emp_id,)
+            ).fetchall()
+            if _fingerprint_row(row, depts) != fingerprint:
+                changed.append(f"{row[1]} {row[2]}")
+        if changed:
+            last = cursor.execute("SELECT ts, user FROM change_log ORDER BY id DESC LIMIT 1").fetchone()
+            who = f" (last change {last[0][11:16]} by {last[1]})" if last else ""
+            raise ConflictError(
+                "Someone else has just changed: " + ", ".join(changed[:5]) + who
+                + ".\nThe view has been refreshed – check it and try again."
+            )
+    finally:
+        conn.close()
 
 
 ###############################################################################
@@ -204,16 +399,24 @@ def _has_employees():
         conn.close()
 
 
-def backup_db():
-    """Kopia przy starcie aplikacji; trzymamy BACKUP_KEEP ostatnich. Błędy nie blokują startu."""
+def backup_db(kind="start"):
+    """Kopia bazy: przy starcie (BACKUP_KEEP ostatnich) albo co godzinę (HOURLY_BACKUP_KEEP).
+    Kopie leżą obok bazy (np. na dysku sieciowym). Błędy nie blokują pracy."""
+    prefix, keep = ("planning_hourly", config.HOURLY_BACKUP_KEEP) if kind == "hourly" \
+        else ("planning_backup", config.BACKUP_KEEP)
     try:
         if not os.path.exists(config.DB_PATH) or not _has_employees():
             return None
+        if kind == "hourly":
+            # przy kilku komputerach wystarczy jedna kopia na godzinę
+            stamp = datetime.now().strftime("%Y-%m-%d_%H")
+            if glob.glob(os.path.join(config.BACKUP_DIR, f"{prefix}_{stamp}*.db")):
+                return None
 
-        target = _copy_db_to(config.BACKUP_DIR, "planning_backup")
+        target = _copy_db_to(config.BACKUP_DIR, prefix)
 
-        old = sorted(glob.glob(os.path.join(config.BACKUP_DIR, "planning_backup_*.db")))
-        for path in old[:-config.BACKUP_KEEP]:
+        old = sorted(glob.glob(os.path.join(config.BACKUP_DIR, f"{prefix}_*.db")))
+        for path in old[:-keep]:
             try:
                 os.remove(path)
             except OSError:
@@ -283,17 +486,31 @@ def undo_last():
     conn = get_connection()
     cursor = conn.cursor()
     try:
+        # Tylko moje zmiany – na wspólnej bazie nie cofamy cudzej pracy.
         entry = cursor.execute("""
             SELECT id, action, details, undo_data FROM change_log
-            WHERE undo_data IS NOT NULL AND undone = 0
+            WHERE undo_data IS NOT NULL AND undone = 0 AND user = ?
             ORDER BY id DESC LIMIT 1
-        """).fetchone()
+        """, (USER,)).fetchone()
 
         if entry is None:
             return None
 
         entry_id, action, details, undo_data = entry
         data = json.loads(undo_data)
+
+        # Jeśli ktoś inny zmienił później te same osoby, cofnięcie nadpisałoby jego zmianę – stop.
+        mine = {item["row"][0] for item in data.get("restore", [])} | set(data.get("delete_ids", []))
+        for other_user, other_data in cursor.execute(
+            "SELECT user, undo_data FROM change_log WHERE id > ? AND user != ? AND undo_data IS NOT NULL "
+            "AND undone = 0", (entry_id, USER)
+        ).fetchall():
+            other = json.loads(other_data)
+            touched = {item["row"][0] for item in other.get("restore", [])} | set(other.get("delete_ids", []))
+            if mine & touched:
+                raise ConflictError(
+                    f"Cannot undo '{action}': {other_user} has changed the same people since then."
+                )
 
         for emp_id in data.get("delete_ids", []):
             cursor.execute("DELETE FROM departments WHERE employee_id = ?", (emp_id,))
@@ -302,14 +519,18 @@ def undo_last():
         all_cols = [c.strip() for c in EMP_COLS.split(",")]
         for item in data.get("restore", []):
             emp_id = item["row"][0]
-            # migawka ze starszej wersji może mieć mniej kolumn
+            # migawka ze starszej wersji może mieć mniej kolumn (np. bez shift_id) – brakujące bierzemy z bazy
             cols = all_cols[:len(item["row"])]
+            existing_shift = cursor.execute("SELECT shift_id FROM employees WHERE id = ?", (emp_id,)).fetchone()
             cursor.execute("DELETE FROM departments WHERE employee_id = ?", (emp_id,))
             cursor.execute("DELETE FROM employees WHERE id = ?", (emp_id,))
             cursor.execute(
                 f"INSERT INTO employees ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                 item["row"][:len(cols)],
             )
+            if "shift_id" not in cols:
+                shift_id = existing_shift[0] if existing_shift and existing_shift[0] else _resolve_shift(cursor)
+                cursor.execute("UPDATE employees SET shift_id = ? WHERE id = ?", (shift_id, emp_id))
             for dept, time_assigned in item["departments"]:
                 cursor.execute(
                     "INSERT INTO departments (employee_id, department, time_assigned) VALUES (?, ?, ?)",
@@ -355,13 +576,23 @@ def _employee_from_row(cursor, row):
         ORDER BY id ASC
     """, (emp.employee_id,))
 
-    emp.dept_times = [(d, t) for d, t in cursor.fetchall()]
+    depts = cursor.fetchall()
+    emp.dept_times = [(d, t) for d, t in depts]
+    emp.shift_id = row[13] if len(row) > 13 else None
+    emp.fingerprint = _fingerprint_row(row, depts)   # do wykrycia zmian z innego komputera
     emp.recalc_intervals_and_hours()
     return emp
 
 
-def _load_employees(cursor):
-    rows = cursor.execute(f"SELECT {EMP_COLS} FROM employees").fetchall()
+def _load_employees(cursor, shift_ids=None):
+    """Pracownicy pokazywanej zmiany (albo podanych zmian)."""
+    if shift_ids is None:
+        current = _resolve_shift(cursor)
+        shift_ids = [current] if current is not None else []
+    if not shift_ids:
+        return []
+    marks = ",".join("?" * len(shift_ids))
+    rows = cursor.execute(f"SELECT {EMP_COLS} FROM employees WHERE shift_id IN ({marks})", shift_ids).fetchall()
     result = [_employee_from_row(cursor, row) for row in rows]
 
     logins = dict(cursor.execute("SELECT name_key, login FROM logins").fetchall())
@@ -411,12 +642,13 @@ def insert_employee_to_db(data):
     conn = get_connection()
     cursor = conn.cursor()
 
+    shift_id = _current_or_new_shift(cursor, _shift_name([data["shift"]]))
     cursor.execute("""
         INSERT INTO employees (
             lastname, firstname, current_department, work_hours, shift, computed_hours, marked, info,
-            custom_breaks
+            custom_breaks, shift_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         data["lastname"],
         data["firstname"],
@@ -427,6 +659,7 @@ def insert_employee_to_db(data):
         0,
         data.get("info", ""),
         serialize_breaks(data.get("custom_breaks")),
+        shift_id,
     ))
 
     employee_id = cursor.lastrowid
@@ -462,7 +695,8 @@ def delete_employees_from_db(employee_ids):
 
 
 def clear_all_data_in_db():
-    """Archiwizuje bazę do pliku, a potem czyści listę. Zwraca ścieżkę archiwum (albo None)."""
+    """Usuwa pokazywaną zmianę (jej listę pracowników); inne zmiany i dni zostają.
+    Przedtem kopia całej bazy do archiwum. Zwraca ścieżkę archiwum (albo None)."""
     archive_path = None
     if _has_employees():
         archive_path = _copy_db_to(config.ARCHIVE_DIR, "planning_archive")
@@ -470,15 +704,19 @@ def clear_all_data_in_db():
     conn = get_connection()
     cursor = conn.cursor()
 
-    all_ids = [r[0] for r in cursor.execute("SELECT id FROM employees").fetchall()]
+    shift_id = _resolve_shift(cursor)
+    all_ids = [r[0] for r in cursor.execute("SELECT id FROM employees WHERE shift_id = ?", (shift_id,)).fetchall()]
+    shift = cursor.execute("SELECT date, name FROM shifts WHERE id = ?", (shift_id,)).fetchone()
     _record(
         cursor, "Clear data",
-        f"{len(all_ids)} employees" + (f", archive: {os.path.basename(archive_path)}" if archive_path else ""),
+        (f"{shift[0]} {shift[1]}: " if shift else "") + f"{len(all_ids)} employees"
+        + (f", archive: {os.path.basename(archive_path)}" if archive_path else ""),
         restore=_snapshot(cursor, all_ids),
     )
 
-    cursor.execute("DELETE FROM departments")
-    cursor.execute("DELETE FROM employees")
+    for emp_id in all_ids:
+        cursor.execute("DELETE FROM departments WHERE employee_id = ?", (emp_id,))
+        cursor.execute("DELETE FROM employees WHERE id = ?", (emp_id,))
     conn.commit()
     conn.close()
     return archive_path
@@ -1044,7 +1282,8 @@ def import_logins_from_excel(filepath):
             )
 
         known = dict(cursor.execute("SELECT name_key, login FROM logins").fetchall())
-        people = cursor.execute("SELECT firstname, lastname FROM employees").fetchall()
+        people = cursor.execute("SELECT firstname, lastname FROM employees WHERE shift_id = ?",
+                                (_resolve_shift(cursor),)).fetchall()
         matched = sum(1 for first, last in people if find_login(name_key(first, last), known))
 
         _record(cursor, "Import logins", f"{len(pairs)} logins, {matched} of {len(people)} employees matched")
@@ -1112,11 +1351,15 @@ def mark_employees_late_in_db(items):
 ###############################################################################
 
 def import_excel_to_db(filepaths):
-    """Zwraca (zaimportowane, pominięte duplikaty). Wszystko albo nic."""
+    """Import planu do zmiany (data + nazwa z pliku). Zwraca (zaimportowane, pominięte duplikaty,
+    nieznane działy). Wszystko albo nic. Pokazywana zmiana w tym oknie przełącza się na importowaną."""
+    global current_shift_id
     if not filepaths:
         return 0, 0, []
 
     employees_df = read_planning_excel(filepaths)
+    shift_date = read_plan_date(filepaths) or date.today().isoformat()
+    shift_name = _shift_name(list(employees_df["shift"])) if len(employees_df) else "Ochtend"
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -1126,8 +1369,10 @@ def import_excel_to_db(filepaths):
     created_ids = []
 
     try:
-        # Pomijamy osoby już obecne w bazie (to samo imię, nazwisko, dział, godziny, zmiana).
-        cursor.execute("SELECT lastname, firstname, current_department, work_hours, shift FROM employees")
+        shift_id = _ensure_shift(cursor, shift_date, shift_name)
+        # Pomijamy osoby już obecne w tej zmianie (to samo imię, nazwisko, dział, godziny, zmiana).
+        cursor.execute("SELECT lastname, firstname, current_department, work_hours, shift FROM employees "
+                       "WHERE shift_id = ?", (shift_id,))
         seen = {tuple(r) for r in cursor.fetchall()}
 
         for _, row_ in employees_df.iterrows():
@@ -1142,9 +1387,10 @@ def import_excel_to_db(filepaths):
 
             cursor.execute("""
                 INSERT INTO employees (
-                    lastname, firstname, current_department, work_hours, shift, computed_hours, marked, position
+                    lastname, firstname, current_department, work_hours, shift, computed_hours, marked, position,
+                    shift_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 lastname,
                 firstname,
@@ -1154,6 +1400,7 @@ def import_excel_to_db(filepaths):
                 row_["computed_hours"],
                 0,
                 position,
+                shift_id,
             ))
 
             employee_id = cursor.lastrowid
@@ -1169,12 +1416,13 @@ def import_excel_to_db(filepaths):
         if created_ids:
             _record(
                 cursor, "Import Excel",
-                f"{count} imported, {skipped} duplicates skipped "
+                f"{shift_date} {shift_name}: {count} imported, {skipped} duplicates skipped "
                 f"({', '.join(os.path.basename(p) for p in filepaths)})",
                 delete_ids=created_ids,
             )
 
         conn.commit()
+        current_shift_id = shift_id
     except Exception:
         conn.rollback()  # wszystko albo nic
         raise
@@ -1273,7 +1521,7 @@ def _sync_consolidation_zones(cursor):
         return sorted(zones, key=lambda z: order.index(z) if z in order else len(order))
 
     changes = []
-    for emp in _load_employees(cursor):
+    for emp in _load_employees(cursor, _recent_shift_ids(cursor)):
         emp_id = emp.employee_id
         if emp.active_department != config.CONSOLIDATION_DEPARTMENT or emp.status in ("sick", "home"):
             if emp_id in prev:
