@@ -1,4 +1,4 @@
-# Plan zmian (stan: 17.11.2026)
+# Plan zmian (stan: 18.11.2026)
 
 ## Cel
 
@@ -78,7 +78,8 @@ Cel: kilka komputerów naraz (helpdesk, steering) pracuje na tych samych danych,
    Inne aplikacje tylko czytają.
 7. **Test na dwóch komputerach** (dwa okna na jednym PC + test na dysku sieciowym w pracy).
 
-Do ustalenia: ścieżka folderu na dysku sieciowym; kto ma prawo zapisu (uprawnienia folderu – IT).
+Ustalone 18.11: aplikacja leży w folderze, do którego mają dostęp jej użytkownicy, a **baza leży w tym samym folderze
+co aplikacja** (tak jest domyślnie, bez żadnego ustawiania). Inne miejsce na bazę – tylko gdy okaże się potrzebne.
 
 ## Etap 4 – tablica do ułożenia po swojemu
 
@@ -108,7 +109,12 @@ Do ustalenia: ścieżka folderu na dysku sieciowym; kto ma prawo zapisu (uprawni
    „AHMAD-NICOLAE KHALAF".
 6. Aplikacja do materiałów czyta loginy z bazy (opis z Etapu 3).
 
-Ustalone 18.11: zakres numerów loginów **001–299**. Do ustalenia: czy loginy Z…P są w ogóle potrzebne.
+Ustalone 18.11: zakres numerów loginów **001–299**. Loginy **Z…P są niepotrzebne** (dawno nieużywane) – nie
+importujemy ich i nie pokazujemy. Używane są tylko **N…P** (picking) i **R…R** (reach).
+
+**Tools Registration** (aplikacja do wydawania skanerów, noży, rękawiczek, kalkulatorów) też potrzebuje loginów –
+dziś czyta je z tego samego Excela Inlognamen. Sposób połączenia (czytanie bazy Planning Managera albo eksport pliku)
+ustalimy **później**; na razie Planning Manager działa sam na swojej bazie.
 
 ## Etap 6 – godziny do Excela (dla księgowości)
 
@@ -156,5 +162,5 @@ Otwarte:
 
 ## Otwarte pytania
 
-- Etap 6: przypisanie działów z planu do kolumn pliku godzin (np. Inleren, Extra, Buffer, Reflex) – do akceptacji.
-- Ścieżka folderu na dysku sieciowym i uprawnienia (Etap 3).
+- Co oznacza godzina 00:00–00:00 w planie.
+- Później: jak Tools Registration ma czytać loginy z Planning Managera (Etap 5).
