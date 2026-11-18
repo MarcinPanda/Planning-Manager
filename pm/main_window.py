@@ -56,6 +56,7 @@ from .dialogs import (
     EditDepartmentDialog,
     HistoryDialog,
     MarkAsLateDialog,
+    PlanHoursDialog,
 )
 from .consolidation_view import ConsolidationView
 from .hours_dialog import HoursDialog, remember_columns, remembered_columns
@@ -1161,8 +1162,11 @@ class MainWindow(QMainWindow):
 
         filepaths = dlg.selectedFiles()
 
+        def task():
+            return db.import_excel_to_db(filepaths), db.employees_without_plan_hours()
+
         def done(result):
-            count, skipped, unknown = result
+            (count, skipped, unknown), no_hours = result
             msg = f"Data imported successfully. Imported rows: {count}"
             if skipped:
                 msg += f"\nSkipped duplicates (already in the database): {skipped}"
@@ -1172,14 +1176,25 @@ class MainWindow(QMainWindow):
                     "(shown under 'Other / unknown' in Monitoring):\n- " + "\n- ".join(unknown)
                 )
                 QMessageBox.warning(self, "Imported with warnings", msg)
-                return
-            QMessageBox.information(self, "Success", msg)
+            else:
+                QMessageBox.information(self, "Success", msg)
+            if no_hours:
+                self.fix_plan_hours(no_hours)
 
-        self.run_db_task(
-            lambda: db.import_excel_to_db(filepaths),
-            on_finished=done,
-            refresh_after=True,
-        )
+        self.run_db_task(task, on_finished=done, refresh_after=True)
+
+    def fix_plan_hours(self, rows):
+        """Osoby z 00:00-00:00 w planie: okienko z możliwością wpisania godzin."""
+        dlg = PlanHoursDialog(rows, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        changes = dlg.changes()
+
+        def done(errors):
+            if errors:
+                QMessageBox.warning(self, "Plan without working hours", "Not changed:\n\n" + "\n".join(errors))
+
+        self.run_db_task(lambda: db.set_plan_hours_in_db(changes), on_finished=done, refresh_after=True)
 
     def clear_data(self):
         reply = QMessageBox.question(

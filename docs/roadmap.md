@@ -162,5 +162,7 @@ Otwarte:
 
 ## Otwarte pytania
 
-- Co oznacza godzina 00:00–00:00 w planie.
+- Co oznacza godzina 00:00–00:00 w planie (17.11 Middag: 4 osoby – Ass TL, Inbound 1, Inbound 2, Laco; jedna z nich
+  była w pracy). Raczej błąd albo rezerwa – do sprawdzenia w pracy. **Na razie:** po imporcie okienko z tymi osobami,
+  można wpisać godziny albo zostawić 0 h.
 - Później: jak Tools Registration ma czytać loginy z Planning Managera (Etap 5).

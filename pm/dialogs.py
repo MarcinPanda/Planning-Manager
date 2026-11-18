@@ -38,7 +38,7 @@ from PySide6.QtCore import (
     Slot,
 )
 
-from .config import DAY8TO17_BREAKS, MIDDAG_BREAKS, OCHTEND_BREAKS, SHIFT_LIST, TEAM_LIST
+from .config import DAY8TO17_BREAKS, MIDDAG_BREAKS, OCHTEND_BREAKS, SHIFT_DEFAULT_HOURS, SHIFT_LIST, TEAM_LIST
 from .logic import (
     Validator,
     adjust_work_hours,
@@ -393,3 +393,91 @@ class HistoryDialog(QDialog):
         close_btn.setFixedHeight(35)
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn)
+
+
+class PlanHoursDialog(QDialog):
+    """Po imporcie: osoby z godzinami 00:00-00:00 w planie (rezerwa albo błąd). Można wpisać godziny
+    albo zostawić 0 h. rows = [(id, nazwisko, imię, dział, zmiana)]."""
+
+    def __init__(self, rows, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Plan without working hours")
+        self.resize(720, 360)
+        self.rows = rows
+        self.boxes, self.edits = [], []
+
+        layout = QVBoxLayout(self)
+        info = QLabel(
+            f"<b>{len(rows)} {'person has' if len(rows) == 1 else 'people have'} 00:00-00:00 in the plan</b> "
+            "– they count as <b>0 h</b>.<br>This is a reserve or a mistake in the plan. Tick a person and correct "
+            "the start / end time, or leave them at 0 h. You can change it later via <i>Edit Department</i>."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        table = QTableWidget(len(rows), 4)
+        table.setHorizontalHeaderLabels(["Correct", "Person", "Department (plan)", "Working hours"])
+        table.verticalHeader().setVisible(False)
+        table.setSelectionMode(QAbstractItemView.NoSelection)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        for col, width in ((0, 70), (2, 170), (3, 150)):
+            table.setColumnWidth(col, width)
+
+        for i, (_, last, first, dept, shift) in enumerate(rows):
+            box = QCheckBox()
+            holder = QWidget()
+            h = QHBoxLayout(holder)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setAlignment(Qt.AlignCenter)
+            h.addWidget(box)
+            table.setCellWidget(i, 0, holder)
+            for col, text in ((1, f"{last} {first}"), (2, dept or "")):
+                item = QTableWidgetItem(text)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                table.setItem(i, col, item)
+            edit = QLineEdit(adjust_work_hours(default_shift_hours(shift), dept or ""))
+            edit.setPlaceholderText("15:00-00:00")
+            edit.textEdited.connect(lambda _text, b=box: b.setChecked(True))
+            table.setCellWidget(i, 3, edit)
+            self.boxes.append(box)
+            self.edits.append(edit)
+        layout.addWidget(table, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        keep = QPushButton("Leave at 0 h")
+        keep.clicked.connect(self.reject)
+        save = QPushButton("Save ticked hours")
+        save.setDefault(True)
+        save.clicked.connect(self.try_accept)
+        buttons.addWidget(keep)
+        buttons.addWidget(save)
+        layout.addLayout(buttons)
+
+    def changes(self):
+        """{id: 'HH:MM-HH:MM'} dla zaznaczonych osób."""
+        return {row[0]: edit.text().replace(" ", "")
+                for row, box, edit in zip(self.rows, self.boxes, self.edits) if box.isChecked()}
+
+    def try_accept(self):
+        if not self.changes():
+            QMessageBox.information(self, "Plan without working hours",
+                                    "Nobody is ticked – everyone stays at 0 h.")
+            self.reject()
+            return
+        wrong = []
+        for (_, last, first, _d, _s), box, edit in zip(self.rows, self.boxes, self.edits):
+            parts = edit.text().replace(" ", "").split("-")
+            if box.isChecked() and (len(parts) != 2 or not all(Validator.validate_time_format(p) for p in parts)
+                                    or parts[0] == parts[1]):
+                wrong.append(f"{last} {first}")
+        if wrong:
+            QMessageBox.warning(self, "Plan without working hours",
+                                "Hours must look like 15:00-00:00:\n\n" + "\n".join(wrong))
+            return
+        self.accept()
+
+
+def default_shift_hours(shift):
+    return SHIFT_DEFAULT_HOURS.get(shift, "08:00-17:00")

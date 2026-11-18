@@ -1498,6 +1498,53 @@ def import_excel_to_db(filepaths):
     return count, skipped, unknown
 
 
+def employees_without_plan_hours(shift_id=None):
+    """Osoby zmiany z godzinami 00:00-00:00 z planu (rezerwa albo błąd w planie):
+    [(id, nazwisko, imię, dział, zmiana)]."""
+    conn = get_connection()
+    try:
+        shift_id = shift_id or _resolve_shift(conn.cursor())
+        return conn.execute(
+            "SELECT id, lastname, firstname, current_department, shift FROM employees "
+            "WHERE shift_id = ? AND REPLACE(work_hours, ' ', '') = ? "
+            "AND REPLACE(COALESCE(NULLIF(planned_hours, ''), work_hours), ' ', '') = ? "
+            "ORDER BY lastname, firstname",
+            (shift_id, config.EMPTY_PLAN_HOURS, config.EMPTY_PLAN_HOURS),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def set_plan_hours_in_db(changes):
+    """Poprawka godzin z planu: {id: 'HH:MM-HH:MM'}. Zmienia godziny pracy i godziny z planu
+    (do nich wraca „Back to work"), przelicza godziny. Zwraca listę błędów."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    errors, changed = [], []
+    snapshot = _snapshot(cursor, list(changes))
+    try:
+        for emp_id, hours in changes.items():
+            emp = load_employee_by_id(cursor, emp_id)
+            if emp is None:
+                continue
+            parts = [p.strip() for p in str(hours).split("-")]
+            if len(parts) != 2 or not all(Validator.validate_time_format(p) for p in parts) or parts[0] == parts[1]:
+                errors.append(f"{emp.lastname} {emp.firstname}: hours must look like 15:00-00:00.")
+                continue
+            emp.work_hours = emp.planned_hours = emp.original_work_hours = f"{parts[0]}-{parts[1]}"
+            emp.recalc_intervals_and_hours()
+            cursor.execute("UPDATE employees SET work_hours = ?, computed_hours = ?, planned_hours = ? WHERE id = ?",
+                           (emp.work_hours, emp.computed_hours, emp.planned_hours, emp_id))
+            changed.append(emp_id)
+        if changed:
+            _record(cursor, "Plan hours", _names(cursor, changed),
+                    restore=[s for s in snapshot if s["row"][0] in changed])
+        conn.commit()
+    finally:
+        conn.close()
+    return errors
+
+
 ###############################################################################
 # Consolidation list (RIT-y) -> strefy Kantel / Consolidatie w Reach
 ###############################################################################

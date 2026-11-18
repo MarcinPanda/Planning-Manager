@@ -52,6 +52,8 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
 ## Funkcje
 
 - Import planu z Excela (duplikaty są pomijane, import jest „wszystko albo nic").
+  Osoby z godzinami **00:00-00:00** w planie (rezerwa albo błąd w planie) – po imporcie okienko: można wpisać im
+  godziny (propozycja = godziny zmiany) albo zostawić 0 h.
 - Dodawanie, edycja i usuwanie działów z godziną zmiany; godziny liczone z przerwami,
   zaokrąglane do 0,25 h.
 - „Ziek" i „Naar Huis" liczą się jako 0 h; „Naar Huis" skraca godziny pracy (celowo).

@@ -62,6 +62,9 @@ TEAM_LIST = [
 TEAM_LIST.sort(key=lambda x: x.lower())
 
 SHIFT_LIST = ["Ochtend", "Middag", "Day8to17", "Custom"]
+SHIFT_DEFAULT_HOURS = {"Ochtend": "06:00-15:00", "Middag": "15:00-00:00", "Day8to17": "08:00-17:00"}
+# Godziny „od północy do północy" w planie: rezerwa albo błąd – po imporcie pytamy, co z nimi zrobić.
+EMPTY_PLAN_HOURS = "00:00-00:00"
 
 columns = (
     "marked", "lastname", "firstname", "work_hours", "computed_hours",
