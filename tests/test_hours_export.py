@@ -9,7 +9,7 @@ from pm import hours_export as hx
 from pm.logic import Employee
 
 HEADERS = ["Teamleader", "Assistent Teamleader", "Reach ", "Orderpicking", "Consolidatie (muv kantel)", "Kantelen",
-           "Laden", "Opleiding", "Lossen - inslag controle", "Controle / Formeren", "Accu", "Extern indirect"]
+           "Laden", "Opleiding", "Lossen - inslag controle", "Controle / Formeren", "Accu", "Herstelplein (VAL)"]
 PEOPLE = [("Kowalski Jan", "Fulltimer"), ("Visser Anna", "Uitzendkracht"), ("De Vries Piet", "Fulltimer")]
 
 
@@ -94,17 +94,14 @@ def test_propose_maps_departments_and_flags_problems(week_file):
     assert by_person["Visser Anna"][0].include is False and "already filled" in by_person["Visser Anna"][0].status
     assert by_person["Nowak Ewa"][0].row is None
     piet = by_person["Vries Piet de"] if "Vries Piet de" in by_person else by_person["de Vries Piet"]
-    assert piet[0].column == "" and piet[0].note == "went home 20:30"
+    assert piet[0].column == "Orderpicking" and piet[0].note == "4.75h Buffer / went home 20:30"
 
 
 def test_write_copy_changes_only_chosen_cells(week_file):
     sheet = hx.read_day_sheet(week_file, "Woensdag")
     emps = [employee("Kowalski", "Jan", [("Reachtruck", ""), ("Orderpicker", "19:00")], late=True),
-            employee("de Vries", "Piet", [("Buffer", ""), ("Naar Huis", "20:30")])]
+            employee("de Vries", "Piet", [("Buffer", ""), ("Fixing Pallets", "17:00"), ("Naar Huis", "20:30")])]
     lines = hx.propose(emps, sheet)
-    for line in lines:
-        if line.department == "Buffer":
-            line.column = "Extern indirect"
     values, notes, errors = hx.build_changes(lines, sheet)
     assert errors == []
     dst = hx.write_copy(week_file, sheet, values, notes)
@@ -119,8 +116,9 @@ def test_write_copy_changes_only_chosen_cells(week_file):
     assert ws["E2"].value == 3.75 and ws["F2"].value == 4.25
     assert ws["P2"].value == "late"          # „late" już było – bez dublowania
     assert ws["D3"].value == 8               # cudze godziny nietknięte
-    assert ws["N4"].value == 4.75            # Buffer → wybrana kolumna (15:00–20:30 minus przerwy)
-    assert ws["P4"].value == "went home 20:30"
+    assert ws["F4"].value == 2.0             # Buffer 15:00–17:00 → Orderpicking
+    assert ws["N4"].value == 2.75            # Fixing Pallets 17:00–20:30 → Herstelplein (VAL)
+    assert ws["P4"].value == "2h Buffer / went home 20:30"
     assert ws["A2"].value.startswith("=IF(Namen!A2")   # formuły zostają
     assert openpyxl.load_workbook(week_file)["Woensdag"]["E2"].value is None   # oryginał bez zmian
 
@@ -159,3 +157,27 @@ def test_week_check_and_day_sheet():
     sheet = hx.DaySheet("x", "Woensdag", "p", {}, "O", [], 47)
     assert hx.check_week(sheet, date(2026, 11, 18)) == ""
     assert "week 46" in hx.check_week(hx.DaySheet("x", "W", "p", {}, "O", [], 46), date(2026, 11, 18))
+
+
+def test_buffer_and_picking_add_up_with_note(week_file):
+    sheet = hx.read_day_sheet(week_file, "Woensdag")
+    emp = employee("Kowalski", "Jan", [("Buffer", ""), ("Orderpicker", "18:00")])
+    lines = hx.propose([emp], sheet)
+    values, notes, errors = hx.build_changes(lines, sheet)
+    assert errors == []
+    assert values == {(2, "F"): 8.0}          # 2,75 h Buffer + 5,25 h picking = 8 h Orderpicking
+    assert notes[2] == "late / 2.75h Buffer"  # „late" było już w pliku
+
+
+def test_second_shift_is_added_to_existing_copy(week_file):
+    sheet = hx.read_day_sheet(week_file, "Woensdag")
+    copy = hx.write_copy(week_file, sheet, {(2, "E"): 8.0}, {})             # ranna zmiana
+    sheet2 = hx.read_day_sheet(copy, "Woensdag")                            # popołudnie czyta kopię
+    assert sheet2.rows[0].values == {"E": 8}
+    hx.write_copy(copy, sheet2, {(4, "H"): 8.0}, {}, dst=copy, overwrite=True, original=week_file)
+    ws = openpyxl.load_workbook(copy)["Woensdag"]
+    assert ws["E2"].value == 8 and ws["H4"].value == 8                      # obie zmiany są w kopii
+    assert openpyxl.load_workbook(week_file)["Woensdag"]["E2"].value is None
+    with pytest.raises(hx.HoursFileError):
+        hx.write_copy(copy, sheet2, {(4, "H"): 1.0}, {}, dst=week_file, overwrite=True, original=week_file)
+    assert hx.original_path(copy) == week_file

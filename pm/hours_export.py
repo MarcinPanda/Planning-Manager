@@ -69,6 +69,12 @@ def copy_path(path):
     return f"{stem}_copy{ext or '.xlsx'}"
 
 
+def original_path(path):
+    """Gdy ktoś wybrał samą kopię (…_copy.xlsx) – ścieżka oryginału."""
+    stem, ext = os.path.splitext(path)
+    return stem[: -len("_copy")] + ext if stem.lower().endswith("_copy") else path
+
+
 def _fmt_number(value):
     value = round(float(value), 4)
     return str(int(value)) if value == int(value) else repr(value)
@@ -253,6 +259,16 @@ def leave_note(employee):
     return " / ".join(parts)
 
 
+def department_note(intervals):
+    """Dopisek dla działów liczonych w innej kolumnie, np. „3h Buffer"."""
+    parts = []
+    for dept, hours in intervals:
+        label = config.HOURS_NOTE_DEPARTMENTS.get(dept)
+        if label and hours:
+            parts.append(f"{hours:g}h {label}")
+    return " / ".join(parts)
+
+
 def default_column(department, remembered=None):
     remembered = remembered or {}
     return remembered.get(department) or config.HOURS_COLUMN_MAP.get(department, "")
@@ -267,7 +283,7 @@ def propose(employees, sheet, remembered=None):
         person = f"{emp.lastname} {emp.firstname}".strip()
         row, problem = find_row(index, name_key(emp.firstname, emp.lastname))
         intervals = [(d, round_to_quarter(h)) for d, h in emp.dept_intervals if round_to_quarter(h) > 0]
-        note = leave_note(emp)
+        note = " / ".join(filter(None, [department_note(intervals), leave_note(emp)]))
         if not intervals:
             dept = emp.active_department or emp.current_department
             intervals = [(dept, 0.0)]
@@ -475,13 +491,16 @@ def verify_copy(src, dst, sheet, cell_updates):
     return problems
 
 
-def write_copy(src, sheet, values, notes, dst=None, overwrite=False):
+def write_copy(src, sheet, values, notes, dst=None, overwrite=False, original=None):
     """Zapisuje kopię z godzinami i ją weryfikuje. Zwraca ścieżkę kopii.
 
+    src = plik bazowy: oryginał albo istniejąca kopia (dopisywanie kolejnej zmiany do tej samej kopii –
+    wtedy `original` = ścieżka oryginału, który nigdy nie jest nadpisywany).
     values = {(wiersz, litera): godziny}, notes = {wiersz: pełny tekst uwag}.
     """
-    dst = dst or copy_path(src)
-    if os.path.normcase(os.path.abspath(dst)) == os.path.normcase(os.path.abspath(src)):
+    original = original or src
+    dst = dst or copy_path(original)
+    if os.path.normcase(os.path.abspath(dst)) == os.path.normcase(os.path.abspath(original)):
         raise HoursFileError("The copy cannot be the original file.")
     if os.path.exists(dst) and not overwrite:
         raise HoursFileError(f"{os.path.basename(dst)} already exists.")

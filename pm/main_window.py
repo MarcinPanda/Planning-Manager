@@ -894,26 +894,34 @@ class MainWindow(QMainWindow):
             return
         settings.setValue("hours_folder", os.path.dirname(filepath))
         sheet_name = hours_export.day_sheet_name(day)
+        original = hours_export.original_path(filepath)
+        target = hours_export.copy_path(original)
+        base = original
+        if os.path.exists(target):
+            box = QMessageBox(QMessageBox.Question, "Hours to Excel",
+                              f"{os.path.basename(target)} already exists.\n\n"
+                              "Add this shift to the existing copy (hours written earlier stay), "
+                              "or start a new copy from the original (earlier hours in the copy are lost)?", parent=self)
+            keep = box.addButton("Add to the copy", QMessageBox.AcceptRole)
+            fresh = box.addButton("New copy from the original", QMessageBox.DestructiveRole)
+            box.addButton(QMessageBox.Cancel)
+            box.setDefaultButton(keep)
+            box.exec()
+            if box.clickedButton() is keep:
+                base = target
+            elif box.clickedButton() is not fresh:
+                return
 
         def show_preview(sheet):
             lines = hours_export.propose(employees, sheet, remembered_columns())
-            title = (f"{os.path.basename(filepath)} → sheet {sheet_name} "
-                     f"({day:%d-%m-%Y}, {shift_name}) → {os.path.basename(hours_export.copy_path(filepath))}")
+            source = "existing copy" if base == target else "original"
+            title = (f"{os.path.basename(base)} ({source}) → sheet {sheet_name} "
+                     f"({day:%d-%m-%Y}, {shift_name}) → {os.path.basename(target)}")
             dialog = HoursDialog(lines, sheet, title, hours_export.check_week(sheet, day), self)
             if dialog.exec() != QDialog.Accepted:
                 return
             remember_columns(dialog.column_choices())
             values, notes, _ = hours_export.build_changes(dialog.lines, sheet)
-            target = hours_export.copy_path(filepath)
-            overwrite = False
-            if os.path.exists(target):
-                answer = QMessageBox.question(
-                    self, "Hours to Excel",
-                    f"{os.path.basename(target)} already exists.\n\nReplace it with a new copy of the original "
-                    f"plus the hours of {sheet_name}?")
-                if answer != QMessageBox.Yes:
-                    return
-                overwrite = True
 
             def done(path):
                 QMessageBox.information(
@@ -922,11 +930,12 @@ class MainWindow(QMainWindow):
                     "Excel recalculates the totals when the copy is opened.")
 
             self.run_db_task(
-                lambda: self._hours_step(hours_export.write_copy, filepath, sheet, values, notes, overwrite=overwrite),
+                lambda: self._hours_step(hours_export.write_copy, base, sheet, values, notes,
+                                         dst=target, overwrite=True, original=original),
                 on_finished=lambda result: self._hours_result(result, done),
             )
 
-        self.run_db_task(lambda: self._hours_step(hours_export.read_day_sheet, filepath, sheet_name),
+        self.run_db_task(lambda: self._hours_step(hours_export.read_day_sheet, base, sheet_name),
                          on_finished=lambda result: self._hours_result(result, show_preview))
 
     @staticmethod

@@ -185,7 +185,7 @@ DEPARTMENT_ALIASES = {
 }
 
 # Etap 6 – godziny do pliku Uren_Lijst (arkusz dnia): dział z planu → nagłówek kolumny w pliku.
-# Działy, których tu nie ma (np. Extra, Buffer, Reflex), wybiera się w podglądzie; wybór jest zapamiętany.
+# Działy, których tu nie ma (Extra, Reflex), wybiera się w podglądzie; wybór jest zapamiętany.
 HOURS_COLUMN_MAP = {
     "Teamleader": "Teamleader",
     "Ass TL": "Assistent Teamleader",
@@ -217,6 +217,11 @@ HOURS_COLUMN_MAP = {
     "Pendel": "Pendel Chauffeur",
     "Klusje/Racking": "Klusjes / racking",
     "Project": "Projecten",
+    "Buffer": "Orderpicking",            # bufferzone = picking + dopisek w uwagach
+    "Fixing Pallets": "Herstelplein (VAL)",
 }
+# Działy, których godziny dostają dopisek w uwagach, np. „3h Buffer" (Reflex = inny system; kolumnę wybiera się
+# w podglądzie: Picking / Reach / Consolidatie / Kantelen).
+HOURS_NOTE_DEPARTMENTS = {"Buffer": "Buffer", "Reflex": "reflex"}
 HOURS_DAY_SHEETS = ["Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag", "Zaterdag", "Zondag"]
 HOURS_MAX_PER_PERSON = 16.0   # więcej godzin jednej osoby w jednym dniu = na pewno błąd

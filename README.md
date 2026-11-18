@@ -67,6 +67,10 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
   Zmieniane są wyłącznie komórki godzin i uwag zaznaczonych osób w arkuszu dnia zmiany; potem kopia jest porównywana
   z oryginałem (inna różnica = kopia usunięta). Osoby, które mają już godziny w tym dniu, nie są zaznaczone.
   Działy → kolumny: `HOURS_COLUMN_MAP` w `pm/config.py`; wybory z podglądu są zapamiętywane.
+  Buffer = Orderpicking + dopisek „3h Buffer"; Fixing Pallets = Herstelplein (VAL); Extra i Reflex – kolumnę
+  wybiera się w podglądzie (Reflex dostaje dopisek „2h reflex").
+  Gdy kopia już istnieje (np. po rannej zmianie): *Add to the copy* dopisuje kolejną zmianę do tej samej kopii,
+  *New copy from the original* zaczyna od nowa.
 - Auto-odświeżanie co 10 s.
 
 ## Układ kodu
