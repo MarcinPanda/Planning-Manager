@@ -6,9 +6,10 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from pm import config, db, theme  # noqa: E402
+from pm import config, db, monitoring, theme  # noqa: E402
 
 theme.persist = False   # testy nie zmieniają zapisanego motywu użytkownika
+monitoring.LayoutStore = monitoring.MemoryLayoutStore   # ani ułożenia tablicy (QSettings)
 
 # Zabezpieczenie: domyślna baza w testach to folder tymczasowy, nigdy prawdziwa planning_data.db
 # (nawet gdyby test cofnął podmianę ścieżki).
@@ -26,7 +27,8 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ARCHIVE_DIR", str(tmp_path / "archive"))
     monkeypatch.setattr(db, "current_shift_id", None)
     db.init_db()
-    return tmp_path
+    yield tmp_path
+    config.apply_zones(config.DEFAULT_ZONES)   # strefy zmienione w teście nie przechodzą do kolejnych
 
 
 def make_employee(lastname="Test", firstname="Anna", department="Buffer",

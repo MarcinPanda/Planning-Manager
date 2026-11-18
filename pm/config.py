@@ -144,6 +144,27 @@ def hall_of(department, position):
     return "South" if position in SOUTH_POSITIONS.get(department, ()) else "North"
 
 
+# Strefy są zapisane w bazie (tabela zones, wspólne dla wszystkich komputerów, ⚙ → Edit zones…).
+# Powyższe listy to ustawienie startowe dla nowej bazy; po wczytaniu bazy apply_zones() podmienia ich zawartość.
+DEFAULT_ZONES = {dept: [(name, hall_of(dept, name)) for name in names] for dept, names in SUB_POSITIONS.items()}
+# Strefy, od których zależy logika programu (lista konsolidacji, godziny Reflex) – bez zmiany nazwy i usuwania.
+PROTECTED_ZONES = ("Kantel/Consolidatie", "Reflex")
+
+
+def apply_zones(zones):
+    """zones = {dział: [(nazwa, hala)]} w kolejności. Zmienia listy na miejscu (inne moduły je importują)."""
+    for dept, entries in zones.items():
+        SUB_POSITIONS.setdefault(dept, [])[:] = [name for name, _ in entries]
+        south = SOUTH_POSITIONS.setdefault(dept, set())
+        south.clear()
+        south.update(name for name, hall in entries if hall == "South")
+
+
+def zones_snapshot():
+    """Bieżące strefy w tym samym kształcie co DEFAULT_ZONES."""
+    return {dept: [(name, hall_of(dept, name)) for name in names] for dept, names in SUB_POSITIONS.items()}
+
+
 # Stare nazwy stref zapisane w bazie -> nowe (zamieniane przy starcie)
 POSITION_RENAMES = {
     "Kantel": "Kantel/Consolidatie",

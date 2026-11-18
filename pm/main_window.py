@@ -63,6 +63,7 @@ from .hours_dialog import HoursDialog, remember_columns, remembered_columns
 from .monitoring import MonitoringView
 from .monitoring_dialogs import GroupHomeDialog, LeaveDialog, TimeDialog, ZonePickerDialog
 from .table_model import EmployeeTableModel
+from .zones_dialog import ZonesDialog
 from .widgets import DatabaseLoadWorker, DatabaseTaskWorker, InfoItemDelegate, MainThreadRelay, ToggleButton
 
 # Widoki w menu po lewej: (nazwa, opis). Indeks = pozycja w QStackedWidget.
@@ -338,6 +339,11 @@ class MainWindow(QMainWindow):
             self.model.refresh(data)
             self.update_count_label()
             if self.monitoring_view is not None:
+                try:
+                    db.load_zones()          # strefy mogły się zmienić na innym komputerze
+                except Exception as exc:
+                    print(f"Zones refresh failed: {exc}")
+                self.monitoring_view.update_zones()
                 self.monitoring_view.set_employees(self.model.all_employees)
             try:
                 self.consolidation_view.set_data(
@@ -588,9 +594,10 @@ class MainWindow(QMainWindow):
             ])
         layout.addWidget(self.export_button)
 
-        self.more_button, (self.theme_action, self.db_action, self.clear_action) = self._menu_tool(
-            "settings", "", [
+        self.more_button, (self.theme_action, self.zones_action, self.db_action, self.clear_action) = \
+            self._menu_tool("settings", "", [
                 ("settings", "Switch to light theme", self.toggle_theme),
+                ("edit_zones", "Edit zones…", self.edit_zones),
                 ("database", "Database location…", self.choose_database_folder),
                 None,
                 ("clear", "Delete this shift…", self.clear_data),
@@ -638,6 +645,33 @@ class MainWindow(QMainWindow):
             return
         db.current_shift_id = shift_id
         self.refresh_data()
+
+    def edit_zones(self):
+        """⋯ → Edit zones…: strefy Reach / Picking, wspólne dla wszystkich komputerów."""
+        try:
+            zones = db.load_zones()
+        except Exception as exc:
+            self._db_error(str(exc))
+            return
+        dialog = ZonesDialog(zones, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        changes = dialog.changes()
+        if not changes:
+            return
+
+        def task():
+            errors = []
+            for dept, (entries, renames) in changes.items():
+                title = config.SUB_POSITION_TITLES.get(dept, dept)
+                errors += [f"{title}: {e}" for e in db.save_zones(dept, entries, renames)]
+            return errors
+
+        def done(errors):
+            if errors:
+                QMessageBox.warning(self, "Edit zones", "Not saved:\n\n" + "\n".join(errors))
+
+        self.run_db_task(task, on_finished=done, refresh_after=True)
 
     def choose_database_folder(self):
         """Folder ze wspólną bazą (np. dysk sieciowy) – zapisany w settings.ini obok programu."""

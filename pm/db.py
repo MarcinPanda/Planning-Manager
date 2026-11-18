@@ -87,7 +87,7 @@ def _create_change_tracking(cursor):
     że trzeba odświeżyć widok."""
     cursor.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)")
     cursor.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('changes', 0)")
-    for table in ("employees", "departments", "consolidation", "logins", "shifts"):
+    for table in ("employees", "departments", "consolidation", "logins", "shifts", "zones"):
         for event in ("INSERT", "UPDATE", "DELETE"):
             cursor.execute(f"""
                 CREATE TRIGGER IF NOT EXISTS trg_{table}_{event.lower()} AFTER {event} ON {table}
@@ -296,6 +296,7 @@ def init_db():
                 cursor.execute(f"UPDATE {table} SET {column} = ? WHERE {key} = ?", (merged, row_id))
 
     _migrate(cursor)
+    _create_zones(cursor)
     _create_change_tracking(cursor)
     _create_zone_periods(cursor)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_departments_employee_id ON departments(employee_id)")
@@ -304,6 +305,128 @@ def init_db():
 
     conn.commit()
     conn.close()
+    load_zones()
+
+
+###############################################################################
+# Zones (strefy / klienci na tablicy Monitoring) – wspólne dla wszystkich komputerów
+###############################################################################
+
+def _create_zones(cursor):
+    """Tabela stref; nowa baza dostaje strefy startowe z config.DEFAULT_ZONES."""
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS zones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            department TEXT NOT NULL,
+            name TEXT NOT NULL,
+            hall TEXT NOT NULL DEFAULT 'North',
+            sort INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (department, name)
+        )
+    """)
+    if cursor.execute("SELECT 1 FROM zones LIMIT 1").fetchone():
+        return
+    for dept, entries in config.DEFAULT_ZONES.items():
+        cursor.executemany("INSERT INTO zones (department, name, hall, sort) VALUES (?, ?, ?, ?)",
+                           [(dept, name, hall, i) for i, (name, hall) in enumerate(entries)])
+
+
+def load_zones():
+    """Strefy z bazy -> config (SUB_POSITIONS / SOUTH_POSITIONS). Zwraca {dział: [(nazwa, hala)]}."""
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT department, name, hall FROM zones ORDER BY department, sort, id").fetchall()
+    finally:
+        conn.close()
+    zones = {dept: [] for dept in config.DEFAULT_ZONES}
+    for dept, name, hall in rows:
+        zones.setdefault(dept, []).append((name, hall))
+    config.apply_zones(zones)
+    return zones
+
+
+def _last_department(cursor, emp_id):
+    row = cursor.execute("SELECT department FROM departments WHERE employee_id = ? ORDER BY id DESC LIMIT 1",
+                         (emp_id,)).fetchone()
+    return row[0] if row else ""
+
+
+def save_zones(department, entries, renames=None):
+    """Nowa lista stref działu: entries = [(nazwa, hala)] w kolejności, renames = {stara nazwa: nowa}.
+    Osoby w strefie o zmienionej nazwie zostają w niej. Zwraca listę błędów (wtedy nic nie jest zapisane)."""
+    renames = {old: new for old, new in (renames or {}).items() if old != new}
+    entries = [(name.strip(), hall) for name, hall in entries]
+    errors = []
+    names = [name for name, _ in entries]
+    if any(not name for name in names):
+        errors.append("A zone needs a name.")
+    seen = set()
+    for name in names:
+        if name.casefold() in seen:
+            errors.append(f"'{name}' is on the list twice.")
+        seen.add(name.casefold())
+    if any(hall not in config.HALLS for _, hall in entries):
+        errors.append("Hall must be North or South.")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        old_names = [r[0] for r in cursor.execute(
+            "SELECT name FROM zones WHERE department = ? ORDER BY sort, id", (department,)).fetchall()]
+        for old in renames:
+            if old in config.PROTECTED_ZONES:
+                errors.append(f"'{old}' cannot be renamed (used by the consolidation list / Reflex hours).")
+        kept = set(names) | set(renames)
+        removed = [name for name in old_names if name not in kept]
+        for name in removed:
+            if name in config.PROTECTED_ZONES:
+                errors.append(f"'{name}' cannot be removed (used by the consolidation list / Reflex hours).")
+
+        # strefa z ludźmi (na wyświetlanej zmianie) nie znika – najpierw trzeba ich przenieść
+        shift_id = _resolve_shift(cursor)
+        people = {}
+        if removed and shift_id is not None:
+            for emp_id, last, first, position in cursor.execute(
+                    "SELECT id, lastname, firstname, position FROM employees WHERE shift_id = ? AND position != ''",
+                    (shift_id,)).fetchall():
+                if _last_department(cursor, emp_id) != department:
+                    continue
+                for name in set(split_positions(position)) & set(removed):
+                    people.setdefault(name, []).append(f"{first} {last}")
+        for name, who in people.items():
+            errors.append(f"'{name}' still has people: {', '.join(sorted(who)[:5])} – move them first.")
+        if errors:
+            return errors
+
+        if renames:
+            for table, key, column in (("employees", "id", "position"),
+                                       ("consolidation_prev", "employee_id", "positions")):
+                for row_id, value in cursor.execute(
+                        f"SELECT {key}, {column} FROM {table} WHERE {column} != ''").fetchall():
+                    emp_id = row_id
+                    if _last_department(cursor, emp_id) != department:
+                        continue
+                    new_value = join_positions([renames.get(p, p) for p in split_positions(value)])
+                    if new_value != value:
+                        cursor.execute(f"UPDATE {table} SET {column} = ? WHERE {key} = ?", (new_value, row_id))
+
+        cursor.execute("DELETE FROM zones WHERE department = ?", (department,))
+        cursor.executemany("INSERT INTO zones (department, name, hall, sort) VALUES (?, ?, ?, ?)",
+                           [(department, name, hall, i) for i, (name, hall) in enumerate(entries)])
+        parts = [f"renamed {old} -> {new}" for old, new in renames.items()]
+        parts += [f"removed {name}" for name in removed]
+        added = [name for name in names if name not in old_names and name not in renames.values()]
+        parts += [f"added {name}" for name in added]
+        _record(cursor, "Zones", f"{config.SUB_POSITION_TITLES.get(department, department)}: "
+                + (", ".join(parts) or "order / halls"))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    load_zones()
+    return []
 
 
 ###############################################################################

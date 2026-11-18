@@ -81,7 +81,10 @@ Cel: kilka komputerów naraz (helpdesk, steering) pracuje na tych samych danych,
 Ustalone 18.11: aplikacja leży w folderze, do którego mają dostęp jej użytkownicy, a **baza leży w tym samym folderze
 co aplikacja** (tak jest domyślnie, bez żadnego ustawiania). Inne miejsce na bazę – tylko gdy okaże się potrzebne.
 
-## Etap 4 – tablica do ułożenia po swojemu
+## Etap 4 – tablica do ułożenia po swojemu ✅ (punkty 1–2 zrobione 18.11 – do sprawdzenia w pracy)
+
+Zrobione: tabela `zones` w bazie, ⋯ → *Edit zones…*, tryb *Arrange board* + *Reset layout*. Strefa po zmianie
+nazwy na komputerze z własnym ułożeniem trafia na koniec kolumny (wystarczy ją przestawić). Punkt 3 – do decyzji.
 
 1. **Edycja stref i klientów** (⚙ → „Edit zones…", schowane):
    - dodaj, usuń, zmień nazwę, wybierz halę (North / South) i dział (Reach / Picking);

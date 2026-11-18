@@ -100,7 +100,13 @@ Monitoring to „oczy steeringu": kto gdzie teraz jest i co robi.
 
 - U góry liczniki: na zmianie, Reach, Picking, Inbound, Other, Unassigned, Ziek, Naar Huis.
 - Hale **North** i **South** (nagłówek zwija halę): kolumny REACH i PICKING, w nich strefy / klienci.
-  Który klient / strefa jest w South – `SOUTH_POSITIONS` w `pm/config.py`; reszta to North.
+- **⋯ → Edit zones…**: dodawanie, zmiana nazwy, usuwanie, hala North / South i kolejność stref Reach i Picking.
+  Zapisane w bazie, więc **wspólne dla wszystkich komputerów** (inne komputery widzą zmianę po kilku sekundach).
+  Strefa z ludźmi na tej zmianie nie da się usunąć; po zmianie nazwy ludzie w niej zostają. Kantel/Consolidatie i
+  Reflex można przesuwać, ale nie zmieniać nazwy ani usuwać. Tego Ctrl+Z nie cofa.
+- **Arrange board**: klocki łapie się za nagłówek i upuszcza na inny klocek tej samej kolumny (Reach, Picking,
+  Inbound, Other). Ułożenie jest zapamiętane **tylko na tym komputerze**; *Reset layout* = kolejność z Edit zones.
+  W tym trybie nie da się przeciągać ludzi.
 - **Both halls**: INBOUND (Inbound 1–5) i OTHER (pozostałe działy).
 - Panel po prawej: **Unassigned** (Reach bez strefy, Picking bez klienta), Ziek, Naar Huis.
 - Pracownik to karta „login – Imię Nazwisko"; `[+2]` = pracuje jeszcze w 2 innych strefach.

@@ -13,10 +13,11 @@ a główne okno zapisuje w bazie (Ctrl+Z cofa).
 import json
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QMimeData, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QMimeData, QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QDrag
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -43,6 +44,7 @@ from .config import (
     SUB_POSITIONS,
     TEAM_LIST,
     hall_of,
+    zones_snapshot,
 )
 from . import theme
 from .db import shift_start_minutes
@@ -62,10 +64,14 @@ Wrong time? Right-click the card → <i>Change time…</i>. Mistake? → <i>Back
 <p><b>⏮ From start of shift:</b> for changes the helpdesk hears about late (e.g. someone was on
 another department since the start). While it is ON (orange bar), a drop changes the department
 from the start of the shift. It switches off by itself 30 minutes after the shift starts.</p>
+<p><b>Arrange board:</b> drag a block by its title onto another block in the same column to change the
+order (only on this computer; <i>Reset layout</i> = back to the default). People cannot be moved while it is on.
+<br>New / renamed zones and halls: ⋯ → <i>Edit zones…</i> (for everyone).</p>
 <p><b>Ctrl+Z</b> undoes the last change. Click a hall header to fold it.</p>
 """
 
 MIME_TYPE = "application/x-planning-employee-ids"
+ZONE_MIME_TYPE = "application/x-planning-board-zone"
 OTHER_ZONE = "Other / unknown"
 SIDE_DEPARTMENTS = ("Ziek", "Naar Huis")   # w panelu po prawej, nie na tablicy
 
@@ -80,7 +86,7 @@ HALL_COLORS = {"North": "#1f6fb2", "South": "#c06a1b", "Both halls": "#4a5966"}
 def login_tooltip(login):
     if not login:
         return "No login (use Import Logins)"
-    return f"Login {login}  ·  picking N{login}P / Z{login}P  ·  reach R{login}R"
+    return f"Login {login}  ·  picking N{login}P  ·  reach R{login}R"
 
 
 def employee_tooltip(emp):
@@ -127,6 +133,60 @@ def section_header(text, color, icon_name=None):
     layout.addWidget(label, 1)
     frame.label = label
     return frame
+
+
+class LayoutStore:
+    """Ułożenie klocków tablicy zapamiętane na tym komputerze: {kolumna: [nazwy klocków po kolei]}."""
+
+    GROUP = "board_layout"
+
+    def __init__(self):
+        self.settings = QSettings("PlanningManager", "PlanningManager")
+
+    def get(self, key):
+        try:
+            value = json.loads(self.settings.value(f"{self.GROUP}/{key}", "[]") or "[]")
+            return [str(v) for v in value] if isinstance(value, list) else []
+        except (TypeError, ValueError):
+            return []
+
+    def set(self, key, names):
+        self.settings.setValue(f"{self.GROUP}/{key}", json.dumps(list(names)))
+
+    def clear(self):
+        self.settings.remove(self.GROUP)
+
+
+class MemoryLayoutStore:
+    """To samo w pamięci (testy)."""
+
+    def __init__(self):
+        self.data = {}
+
+    def get(self, key):
+        return list(self.data.get(key, []))
+
+    def set(self, key, names):
+        self.data[key] = list(names)
+
+    def clear(self):
+        self.data.clear()
+
+
+def ordered(names, saved):
+    """Kolejność zapamiętana przez użytkownika; nowe strefy (spoza zapamiętanej listy) na końcu."""
+    return [n for n in saved if n in names] + [n for n in names if n not in saved]
+
+
+def move_before(names, title, target):
+    """Klocek `title` zajmuje miejsce klocka `target`, reszta się przesuwa."""
+    names = list(names)
+    if title not in names or target not in names or title == target:
+        return names
+    index = names.index(target)
+    names.remove(title)
+    names.insert(index, title)
+    return names
 
 
 class EmployeeList(QListWidget):
@@ -244,6 +304,7 @@ class DropZone(QFrame):
     move_requested = Signal(list, str, str, str, bool)  # ids, dział, pozycja, pozycja źródłowa, dołóż
     action_requested = Signal(str, list, str)           # akcja, ids, pozycja tej strefy
     drag_state = Signal(bool)
+    zone_moved = Signal(str, str, str)                  # kolumna, przenoszony klocek, klocek docelowy
 
     def __init__(self, title, department, position="", accepts_drops=True, fit=True, min_rows=1,
                  show_leave=False, parent=None):
@@ -251,6 +312,10 @@ class DropZone(QFrame):
         self.title = title
         self.department = department
         self.position = position
+        self.accepts_drops = accepts_drops
+        self.column_key = ""      # kolumna tablicy (do układania klocków); '' = poza tablicą
+        self.arranging = False
+        self._press_pos = None
         self.fit = fit            # True: wysokość dopasowana do liczby kart (bez przewijania)
         self.min_rows = min_rows
         self.show_leave = show_leave  # Ziek / Naar Huis: godzina wyjścia na karcie
@@ -266,6 +331,7 @@ class DropZone(QFrame):
         self.title_label.setAlignment(Qt.AlignCenter)
         self.title_label.setWordWrap(True)   # długie nazwy (Kantel/Consolidatie) w dwóch liniach zamiast ucięcia
         self.title_label.setMinimumWidth(10)
+        self.title_label.installEventFilter(self)
         layout.addWidget(self.title_label)
 
         self.list = EmployeeList(accepts_drops)
@@ -281,6 +347,82 @@ class DropZone(QFrame):
 
     def ids(self):
         return [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())]
+
+    # ------------------------------------------------ układanie klocków (Arrange board)
+    def set_arranging(self, on):
+        """Tryb układania: klocek łapie się za nagłówek; kart osób nie da się wtedy przeciągać."""
+        self.arranging = on
+        self.list.setDragEnabled(not on)
+        self.list.setAcceptDrops(self.accepts_drops and not on)
+        self.setAcceptDrops(on)
+        self.title_label.setCursor(Qt.OpenHandCursor if on else Qt.ArrowCursor)
+        self.title_label.setToolTip("Drag onto another block to move it" if on else "")
+        self.setProperty("arranging", on)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def eventFilter(self, obj, event):
+        if obj is self.title_label and self.arranging:
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._press_pos = event.position().toPoint()
+                return True
+            if event.type() == QEvent.MouseMove and self._press_pos is not None:
+                if (event.position().toPoint() - self._press_pos).manhattanLength() >= \
+                        QApplication.startDragDistance():
+                    self._press_pos = None
+                    self._start_zone_drag()
+                return True
+            if event.type() == QEvent.MouseButtonRelease:
+                self._press_pos = None
+        return super().eventFilter(obj, event)
+
+    def _start_zone_drag(self):
+        mime = QMimeData()
+        mime.setData(ZONE_MIME_TYPE, json.dumps({"column": self.column_key, "title": self.title}).encode("utf-8"))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.setPixmap(self.grab().scaledToWidth(min(self.width(), 160), Qt.SmoothTransformation))
+        self.drag_state.emit(True)    # bez przebudowy tablicy w trakcie przeciągania
+        try:
+            drag.exec(Qt.MoveAction)
+        finally:
+            self.drag_state.emit(False)
+
+    def _zone_payload(self, event):
+        if not (self.arranging and event.mimeData().hasFormat(ZONE_MIME_TYPE)):
+            return None
+        try:
+            payload = json.loads(bytes(event.mimeData().data(ZONE_MIME_TYPE)).decode("utf-8"))
+        except ValueError:
+            return None
+        if payload.get("column") != self.column_key or payload.get("title") == self.title:
+            return None
+        return payload
+
+    def dragEnterEvent(self, event):
+        if self._zone_payload(event):
+            self._set_hover(True)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self._zone_payload(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._set_hover(False)
+
+    def dropEvent(self, event):
+        self._set_hover(False)
+        payload = self._zone_payload(event)
+        if not payload:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.zone_moved.emit(self.column_key, str(payload["title"]), self.title)
 
     def _set_hover(self, on):
         """Podświetlenie ramki, gdy nad strefą jest przeciągana karta (kolor z motywu)."""
@@ -324,10 +466,13 @@ class DropZone(QFrame):
 class Column(QFrame):
     """Kolumna tablicy (REACH / PICKING / INBOUND / OTHER): nagłówek + siatka stref."""
 
-    def __init__(self, title, zones, grid_columns, icon_name=None, parent=None):
+    def __init__(self, title, zones, grid_columns, icon_name=None, key="", parent=None):
         super().__init__(parent)
         self.title = title
         self.zones = zones
+        self.key = key
+        for zone in zones:
+            zone.column_key = key
         self.icon_name = icon_name
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -419,9 +564,13 @@ class MonitoringView(QWidget):
     action_requested = Signal(str, list)         # 'time' / 'back' / 'zones', ids
     group_home_requested = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, layout_store=None):
         super().__init__(parent)
-
+        self.layout_store = layout_store if layout_store is not None else LayoutStore()
+        self.board_zones = []     # klocki tablicy (przebudowywane po zmianie stref / ułożenia)
+        self.board_body = None
+        self._zones_signature = None
+        self.columns = []
         self.dragging = False
         self._signature = None
         self.zones = {}           # dział -> DropZone (działy bez stref, także Ziek / Naar Huis)
@@ -462,6 +611,20 @@ class MonitoringView(QWidget):
         self.from_start_button.setMinimumWidth(self.from_start_button.fontMetrics().horizontalAdvance(
             self.from_start_button.text()) + 60)
         self.from_start_button.toggled.connect(self._set_from_start)
+
+        self.arrange_button = QPushButton("Arrange board")
+        self.arrange_button.setCheckable(True)
+        self.arrange_button.setCursor(Qt.PointingHandCursor)
+        self.arrange_button.setIconSize(QSize(18, 18))
+        self.arrange_button.setToolTip("Change the order of the blocks on this computer:\n"
+                                       "drag a block by its title onto another block in the same column.")
+        self.arrange_button.toggled.connect(self.set_arranging)
+        kpi_bar.addWidget(self.arrange_button)
+        self.reset_layout_button = QPushButton("Reset layout")
+        self.reset_layout_button.setToolTip("Back to the default order (from Edit zones…)")
+        self.reset_layout_button.clicked.connect(self.reset_layout)
+        self.reset_layout_button.setVisible(False)
+        kpi_bar.addWidget(self.reset_layout_button)
         kpi_bar.addWidget(self.from_start_button)
 
         self.help_button = QPushButton()
@@ -485,6 +648,15 @@ class MonitoringView(QWidget):
         self.from_start_timer.timeout.connect(self._check_from_start)
         self.from_start_timer.start(20_000)
 
+        self.arrange_banner = QLabel(
+            "ARRANGE BOARD – drag a block by its title onto another block in the same column. "
+            "People cannot be moved now. Click 'Arrange board' again when you are done.")
+        self.arrange_banner.setWordWrap(True)
+        self.arrange_banner.setStyleSheet(
+            "background-color: #2e86c1; color: #ffffff; font-weight: bold; padding: 7px 12px; border-radius: 7px;")
+        self.arrange_banner.setVisible(False)
+        outer.addWidget(self.arrange_banner)
+
         main = QHBoxLayout()
         main.setSpacing(6)
         outer.addLayout(main, 1)
@@ -499,30 +671,9 @@ class MonitoringView(QWidget):
         board.setObjectName("board")
         board_layout = QVBoxLayout(board)
         board_layout.setContentsMargins(0, 0, 6, 0)
-        scroll.setWidget(board)
-
-        self.columns = []
-        for hall in HALLS:
-            columns = []
-            for dept, grid_columns, icon_name in (("Reachtruck", 4, "reach"), ("Orderpicker", 5, "picking")):
-                zones = [self._position_zone(dept, pos) for pos in SUB_POSITIONS[dept] if hall_of(dept, pos) == hall]
-                columns.append(Column(SUB_POSITION_TITLES[dept].upper(), zones, grid_columns, icon_name))
-            self.columns += columns
-            self.halls[hall] = HallSection(hall, HALL_COLORS[hall], columns, (4, 5),
-                                           "hall_north" if hall == "North" else "hall_south")
-            board_layout.addWidget(self.halls[hall])
-
-        inbound = [d for d in TEAM_LIST if d.startswith(INBOUND_PREFIX)]
-        other = [d for d in TEAM_LIST
-                 if d not in SUB_POSITIONS and d not in SIDE_DEPARTMENTS and d not in inbound]
-        shared = [
-            Column("INBOUND", [self._department_zone(d) for d in inbound], 1, "inbound"),
-            Column("OTHER", [self._department_zone(d) for d in other], 6, "other"),
-        ]
-        self.columns += shared
-        self.halls["Both halls"] = HallSection("Both halls", HALL_COLORS["Both halls"], shared, (1, 6), "other")
-        board_layout.addWidget(self.halls["Both halls"])
         board_layout.addStretch()
+        scroll.setWidget(board)
+        self.board_layout = board_layout
 
         # ---- panel po prawej
         side = QWidget()
@@ -562,6 +713,103 @@ class MonitoringView(QWidget):
         self._connect(self.other_zone)
         side_layout.addWidget(self.other_zone, 1)
         self.other_zone.setVisible(False)
+
+        self._build_board()
+
+    # ------------------------------------------------------------- tablica
+    def _ordered_zones(self, key, names, make):
+        zones = [make(name) for name in ordered(names, self.layout_store.get(key))]
+        for zone in zones:
+            self.board_zones.append(zone)
+            zone.zone_moved.connect(self.move_zone)
+        return zones
+
+    def _build_board(self):
+        """(Prze)budowa hal i klocków: po zmianie stref (Edit zones…) albo ułożenia (Arrange board)."""
+        folded = {name: not hall.header.isChecked() for name, hall in self.halls.items()}
+        for zone in self.board_zones:
+            if zone in self.all_zones:
+                self.all_zones.remove(zone)
+            if zone.position:
+                self.position_zones.pop((zone.department, zone.position), None)
+            else:
+                self.zones.pop(zone.department, None)
+        self.board_zones = []
+        if self.board_body is not None:
+            self.board_body.setParent(None)
+            self.board_body.deleteLater()
+
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        self.columns = []
+        self.halls = {}
+        for hall in HALLS:
+            columns = []
+            for dept, grid_columns, icon_name in (("Reachtruck", 4, "reach"), ("Orderpicker", 5, "picking")):
+                key = f"{hall}:{dept}"
+                names = [pos for pos in SUB_POSITIONS.get(dept, []) if hall_of(dept, pos) == hall]
+                zones = self._ordered_zones(key, names, lambda pos, d=dept: self._position_zone(d, pos))
+                columns.append(Column(SUB_POSITION_TITLES[dept].upper(), zones, grid_columns, icon_name, key))
+            self.columns += columns
+            self.halls[hall] = HallSection(hall, HALL_COLORS[hall], columns, (4, 5),
+                                           "hall_north" if hall == "North" else "hall_south")
+            body_layout.addWidget(self.halls[hall])
+
+        inbound = [d for d in TEAM_LIST if d.startswith(INBOUND_PREFIX)]
+        other = [d for d in TEAM_LIST
+                 if d not in SUB_POSITIONS and d not in SIDE_DEPARTMENTS and d not in inbound]
+        shared = [
+            Column("INBOUND", self._ordered_zones("Both:Inbound", inbound, self._department_zone), 1, "inbound",
+                   "Both:Inbound"),
+            Column("OTHER", self._ordered_zones("Both:Other", other, self._department_zone), 6, "other",
+                   "Both:Other"),
+        ]
+        self.columns += shared
+        self.halls["Both halls"] = HallSection("Both halls", HALL_COLORS["Both halls"], shared, (1, 6), "other")
+        body_layout.addWidget(self.halls["Both halls"])
+        for name, hall in self.halls.items():
+            if folded.get(name):
+                hall.header.setChecked(False)
+
+        self.board_layout.insertWidget(0, body)
+        self.board_body = body
+        self._zones_signature = zones_snapshot()
+        for zone in self.board_zones:
+            zone.set_arranging(self.arrange_button.isChecked())
+        for column in self.columns:
+            column.refresh_theme()
+
+    def zone_order(self, key):
+        """Bieżąca kolejność klocków w kolumnie (do testów i zapisu)."""
+        column = next((c for c in self.columns if c.key == key), None)
+        return [zone.title for zone in column.zones] if column else []
+
+    def move_zone(self, key, title, target):
+        self.layout_store.set(key, move_before(self.zone_order(key), title, target))
+        QTimer.singleShot(0, self._rebuild)   # nie usuwamy klocka w trakcie obsługi jego upuszczenia
+
+    def reset_layout(self):
+        self.layout_store.clear()
+        self._rebuild()
+
+    def update_zones(self):
+        """Wywoływane po każdym odświeżeniu: strefy zmienione (także na innym komputerze) -> nowa tablica."""
+        if zones_snapshot() != self._zones_signature and not self.dragging:
+            self._rebuild()
+
+    def _rebuild(self):
+        self._build_board()
+        self.set_employees(self.employees, force=True)
+
+    def set_arranging(self, on):
+        if self.arrange_button.isChecked() != on:
+            self.arrange_button.setChecked(on)   # wywoła tę metodę jeszcze raz
+            return
+        self.arrange_banner.setVisible(on)
+        self.reset_layout_button.setVisible(on)
+        for zone in self.board_zones:
+            zone.set_arranging(on)
 
     # ------------------------------------------------------------- budowa
     def _connect(self, zone):
@@ -614,6 +862,7 @@ class MonitoringView(QWidget):
     def refresh_theme(self):
         """Ikony w kolorach bieżącego motywu (po zmianie jasny / ciemny)."""
         self.from_start_button.setIcon(theme.icon("from_start", checked_key="black"))
+        self.arrange_button.setIcon(theme.icon("move"))
         self.help_button.setIcon(theme.icon("help"))
         self.group_button.setIcon(theme.icon("bulk"))
         for column in self.columns:
