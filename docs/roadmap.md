@@ -108,12 +108,25 @@ Do ustalenia: ścieżka folderu na dysku sieciowym; kto ma prawo zapisu (uprawni
    „AHMAD-NICOLAE KHALAF".
 6. Aplikacja do materiałów czyta loginy z bazy (opis z Etapu 3).
 
-Do ustalenia: zakres numerów loginów (np. 001–299?); czy loginy Z…P są w ogóle potrzebne.
+Ustalone 18.11: zakres numerów loginów **001–299**. Do ustalenia: czy loginy Z…P są w ogóle potrzebne.
 
 ## Etap 6 – godziny do Excela (dla księgowości)
 
-1. **Analiza pliku z godzinami** (będzie jutro): arkusze, kolumny, formuły, makra, dane z systemu zegarowego, który
-   arkusz wypełnia helpdesk.
+1. **Analiza pliku z godzinami** ✅ (18.11, pliki `Uren_Lijst_WEEK_46/47.xlsx`, bez makr):
+   - jeden plik na tydzień; arkusze dni `Maandag` … `Zondag` = to, co wypełnia helpdesk;
+   - w arkuszu dnia wiersz 2–394 = osoba (kolumna A to formuła z arkusza `Namen`, tego samego wiersza),
+     kolumny C–AI = 33 rodzaje pracy (Teamleader … Extern indirect), wpisywane ręcznie liczby godzin (co 0,25),
+     AJ = suma (formuła), AK = uwagi („went home 20:30", „late", „opl pick with …");
+   - wiersz 395 = sumy, 396 = „Maximale uren inzet"; obie zmiany (Ochtend + Middag) są w tym samym arkuszu dnia;
+   - `Namen`: nazwisko i imię, rodzaj umowy, numer personalny, godziny dnia vs ATPS i kolumny kontroli;
+   - `ATPS <dzień>` = wklejone dane z systemu zegarowego (numer personalny, wejście / wyjście, godziny, nieobecność),
+     `Overview` / `Max ureninzet` = sumy i limity;
+   - plik jest „udostępnionym skoroszytem" (historia zmian, 276 wpisów). **Zapis przez openpyxl zgubiłby historię,
+     ustawienia drukarki i inne części pliku**, dlatego zapis musi zmieniać tylko komórki godzin w XML arkusza dnia,
+     a resztę pliku kopiować bajt w bajt.
+   - Porównanie z planem 17.11 (Middag): 53 z 56 osób znalezione po nazwisku. Działy z planu często nie pokrywają się
+     z wpisanymi godzinami (np. Consolidatie/Kantelen → podział na Consolidatie i Kantelen, Inbound → Reach / Accu,
+     nadgodziny liderów), więc podgląd przed zapisem musi pozwalać poprawić godziny.
 2. **Projekt zapisu** do akceptacji, zanim cokolwiek zapiszemy:
    - oryginał nigdy nie jest otwierany do zapisu;
    - zapis do kopii `<nazwa>_copy.xlsx`;
@@ -131,6 +144,5 @@ Do ustalenia: zakres numerów loginów (np. 001–299?); czy loginy Z…P są w 
 
 ## Otwarte pytania
 
-- Plik z godzinami: będzie jutro.
+- Etap 6: przypisanie działów z planu do kolumn pliku godzin (np. Inleren, Extra, Buffer, Reflex) – do akceptacji.
 - Ścieżka folderu na dysku sieciowym i uprawnienia (Etap 3).
-- Zakres numerów loginów (Etap 5).
