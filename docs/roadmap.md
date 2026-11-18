@@ -43,7 +43,7 @@ Zasady:
   - Prawy klik na karcie otwiera listę stref z ptaszkami. Karta pokazuje, że osoba ma więcej stref.
 - [x] Strefy i ich kolejność:
   - Picking North: Choco, Pladis, Ferrero, Nutricia, Riverside, Alpro, Petfood, Essity, Pietercil, Tlant;
-  - Picking South: Mars GUM, Mars ITR, Grenade, Jordan, Reflex;
+  - Picking South: Mars Gum, Mars ITR, Grenade, Jordan, Reflex;
   - Reach South: Zuid, Mars ITR, Grenade, Jordan, Reflex (bez Mars NL i Pietercil).
 - [x] Karty z pełnym imieniem i nazwiskiem. Długie nazwy są skracane „…", a pełna nazwa jest w podpowiedzi.
 - [x] Środek tablicy mieści się na szerokość bez przewijania, a panel po prawej jest węższy.

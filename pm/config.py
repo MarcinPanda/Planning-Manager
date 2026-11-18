@@ -122,7 +122,7 @@ SUB_POSITIONS = {
     "Orderpicker": [
         "Choco (12)", "Pladis (22)", "Ferrero (27+28)", "Nutricia (10)", "Riverside (21)",  # North
         "Alpro (23)", "Petfood (13)", "Essity (14)", "Pietercil (15)", "Tlant (25)",
-        "Mars GUM", "Mars ITR (18 20)", "Grenade", "Jordan", "Reflex",                       # South
+        "Mars Gum", "Mars ITR (18 20)", "Grenade", "Jordan", "Reflex",                       # South
     ],
 }
 SUB_POSITION_TITLES = {
@@ -135,7 +135,7 @@ SUB_POSITION_TITLES = {
 HALLS = ("North", "South")
 SOUTH_POSITIONS = {
     "Reachtruck": {"Zuid", "Mars ITR", "Grenade", "Jordan", "Reflex"},
-    "Orderpicker": {"Mars GUM", "Mars ITR (18 20)", "Grenade", "Jordan", "Reflex"},
+    "Orderpicker": {"Mars Gum", "Mars ITR (18 20)", "Grenade", "Jordan", "Reflex"},
 }
 INBOUND_PREFIX = "Inbound"   # działy „Inbound 1..5" -> kolumna INBOUND
 
@@ -170,7 +170,8 @@ POSITION_RENAMES = {
     "Kantel": "Kantel/Consolidatie",
     "Consolidatie": "Kantel/Consolidatie",
     "ITR (18 20)": "Mars ITR (18 20)",
-    "Mars GAM": "Mars GUM",
+    "Mars GAM": "Mars Gum",
+    "Mars GUM": "Mars Gum",
 }
 
 # Tryb „od początku zmiany" wyłącza się sam po tylu minutach od startu zmiany

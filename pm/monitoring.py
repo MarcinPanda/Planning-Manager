@@ -376,6 +376,8 @@ class ZoneHeader(QWidget):
         outer.addLayout(texts)
 
         people = QWidget()
+        people.setObjectName("zonePeople")
+        people.setAttribute(Qt.WA_StyledBackground, False)
         people_layout = QHBoxLayout(people)
         people_layout.setContentsMargins(0, 2, 0, 0)
         people_layout.setSpacing(2)
@@ -574,6 +576,7 @@ class DropZone(QFrame):
                            f"QLabel#zoneCount {{ color: {theme.color('muted')}; font-weight: 600; background: transparent;"
                            " border: none; }"
                            "QLabel { background: transparent; border: none; }"
+                           "QWidget#zonePeople, ZoneHeader { background: transparent; border: none; }"
                            "QListWidget { background: transparent; border: none; }")
 
     def set_lift(self, mode):

@@ -298,6 +298,12 @@ def init_db():
 
     _migrate(cursor)
     _create_zones(cursor)
+    # te same zmiany nazw w tabeli stref (np. „Mars GUM" -> „Mars Gum"), gdy nowej nazwy jeszcze nie ma
+    for old, new in config.POSITION_RENAMES.items():
+        cursor.execute("""
+            UPDATE zones SET name = ? WHERE name = ? AND NOT EXISTS (
+                SELECT 1 FROM zones AS z WHERE z.department = zones.department AND z.name = ?)
+        """, (new, old, new))
     _create_change_tracking(cursor)
     _create_zone_periods(cursor)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_departments_employee_id ON departments(employee_id)")
