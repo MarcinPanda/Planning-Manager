@@ -61,6 +61,12 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
 - Cofnij (Ctrl+Z) – 30 ostatnich operacji.
 - Historia zmian: kto, kiedy, co.
 - Eksport widocznej tabeli do Excela i wydruk z podglądem.
+- **Godziny do pliku tygodnia** (Export ▾ → *Hours to week file (Uren_Lijst)…*): wybierasz plik
+  `Uren_Lijst_WEEK_NN.xlsx`, program pokazuje podgląd „osoba → kolumna → godziny" (do poprawienia, *Split line*
+  = podział godzin na dwie kolumny) i zapisuje **kopię** `…_copy.xlsx` obok oryginału. Oryginał jest tylko czytany.
+  Zmieniane są wyłącznie komórki godzin i uwag zaznaczonych osób w arkuszu dnia zmiany; potem kopia jest porównywana
+  z oryginałem (inna różnica = kopia usunięta). Osoby, które mają już godziny w tym dniu, nie są zaznaczone.
+  Działy → kolumny: `HOURS_COLUMN_MAP` w `pm/config.py`; wybory z podglądu są zapamiętywane.
 - Auto-odświeżanie co 10 s.
 
 ## Układ kodu

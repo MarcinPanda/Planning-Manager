@@ -183,3 +183,40 @@ DEPARTMENT_ALIASES = {
     "inleren orderpick": "Inleren Orderpicker",
     "inleren picking": "Inleren Orderpicker",
 }
+
+# Etap 6 – godziny do pliku Uren_Lijst (arkusz dnia): dział z planu → nagłówek kolumny w pliku.
+# Działy, których tu nie ma (np. Extra, Buffer, Reflex), wybiera się w podglądzie; wybór jest zapamiętany.
+HOURS_COLUMN_MAP = {
+    "Teamleader": "Teamleader",
+    "Ass TL": "Assistent Teamleader",
+    "Shiftleader": "Shiftleader",
+    "Logistiek coördinator": "Logistiek Coordinator",
+    "Sturing": "Warehouse Sturing",
+    "Helpdesk": "Helpdesk",
+    "Stock Control": "Stock Control",
+    "Laco": "Laco",
+    "Inbound 1": "Lossen - inslag controle",
+    "Inbound 2": "Lossen - inslag controle",
+    "Inbound 3": "Lossen - inslag controle",
+    "Inbound 4": "Lossen - inslag controle",
+    "Inbound 5": "Lossen - inslag controle",
+    "Retouren": "Retouren",
+    "Reachtruck": "Reach",
+    "Orderpicker": "Orderpicking",
+    "Consolidatie/Kantelen": "Kantelen",
+    "Controle": "Controle / Formeren",
+    "Laden": "Laden",
+    "VAL": "Herstelplein (VAL)",
+    "Cycle Count": "Cycle count",
+    "Schoonmaak": "Schoonmaak",
+    "Opleiding": "Opleiding",
+    "Inleren Orderpicker": "Opleiding",
+    "Inleren Reachtruck": "Opleiding",
+    "Emballage": "Emballage",
+    "Accu": "Accu",
+    "Pendel": "Pendel Chauffeur",
+    "Klusje/Racking": "Klusjes / racking",
+    "Project": "Projecten",
+}
+HOURS_DAY_SHEETS = ["Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag", "Zaterdag", "Zondag"]
+HOURS_MAX_PER_PERSON = 16.0   # więcej godzin jednej osoby w jednym dniu = na pewno błąd

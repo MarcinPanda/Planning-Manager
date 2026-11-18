@@ -127,6 +127,10 @@ Ustalone 18.11: zakres numerów loginów **001–299**. Do ustalenia: czy loginy
    - Porównanie z planem 17.11 (Middag): 53 z 56 osób znalezione po nazwisku. Działy z planu często nie pokrywają się
      z wpisanymi godzinami (np. Consolidatie/Kantelen → podział na Consolidatie i Kantelen, Inbound → Reach / Accu,
      nadgodziny liderów), więc podgląd przed zapisem musi pozwalać poprawić godziny.
+Stan 18.11: punkty 2–4 zrobione (`pm/hours_export.py`, `pm/hours_dialog.py`, menu Export ▾). Sprawdzone na kopii
+pliku tygodnia 47: 50 komórek, prawdziwy Excel otwiera kopię bez naprawy, sumy się przeliczają, plik zostaje
+„udostępnionym skoroszytem". Do zrobienia: punkt 5 (testy w pracy na kilku dniach i obu zmianach).
+
 2. **Projekt zapisu** do akceptacji, zanim cokolwiek zapiszemy:
    - oryginał nigdy nie jest otwierany do zapisu;
    - zapis do kopii `<nazwa>_copy.xlsx`;

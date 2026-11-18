@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from PySide6.QtCore import (
+    QSettings,
     QSize,
     QTime,
     QEasingCurve,
@@ -46,7 +47,7 @@ from PySide6.QtPrintSupport import QPrintPreviewDialog, QPrinter
 
 import os
 
-from . import config, db, theme
+from . import config, db, hours_export, theme
 from .config import ROW_COLOR_HOME, ROW_COLOR_LATE, ROW_COLOR_SICK, SYNC_INTERVAL_MS, col_names, columns
 from .excel_io import export_rows_to_excel
 from .dialogs import (
@@ -57,6 +58,7 @@ from .dialogs import (
     MarkAsLateDialog,
 )
 from .consolidation_view import ConsolidationView
+from .hours_dialog import HoursDialog, remember_columns, remembered_columns
 from .monitoring import MonitoringView
 from .monitoring_dialogs import GroupHomeDialog, LeaveDialog, TimeDialog, ZonePickerDialog
 from .table_model import EmployeeTableModel
@@ -580,6 +582,7 @@ class MainWindow(QMainWindow):
         self.export_button, _ = self._menu_tool(
             "export", "Export", [
                 ("export", "Export to Excel…", self.export_excel),
+                ("export", "Hours to week file (Uren_Lijst)…", self.export_hours),
                 ("print", "Print…", self.print_table),
             ])
         layout.addWidget(self.export_button)
@@ -873,6 +876,75 @@ class MainWindow(QMainWindow):
             lambda: export_rows_to_excel(rows, filepath),
             on_finished=lambda _: self.statusBar().showMessage(f"Exported {len(rows)} rows to {filepath}", 8000),
         )
+
+    def export_hours(self):
+        """Etap 6: godziny tej zmiany do kopii tygodniowego pliku Uren_Lijst (podgląd przed zapisem)."""
+        shift = db.resolved_shift()
+        employees = list(self.model.all_employees)
+        if not shift or not employees:
+            QMessageBox.information(self, "Hours to Excel", "There is no shift with people to export.")
+            return
+        _, shift_date, shift_name = shift
+        day = hours_export.parse_date(shift_date)
+        settings = QSettings("PlanningManager", "PlanningManager")
+        start_dir = settings.value("hours_folder", "")
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Week file with hours (the original is only read)", start_dir, "Excel files (*.xlsx)")
+        if not filepath:
+            return
+        settings.setValue("hours_folder", os.path.dirname(filepath))
+        sheet_name = hours_export.day_sheet_name(day)
+
+        def show_preview(sheet):
+            lines = hours_export.propose(employees, sheet, remembered_columns())
+            title = (f"{os.path.basename(filepath)} → sheet {sheet_name} "
+                     f"({day:%d-%m-%Y}, {shift_name}) → {os.path.basename(hours_export.copy_path(filepath))}")
+            dialog = HoursDialog(lines, sheet, title, hours_export.check_week(sheet, day), self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            remember_columns(dialog.column_choices())
+            values, notes, _ = hours_export.build_changes(dialog.lines, sheet)
+            target = hours_export.copy_path(filepath)
+            overwrite = False
+            if os.path.exists(target):
+                answer = QMessageBox.question(
+                    self, "Hours to Excel",
+                    f"{os.path.basename(target)} already exists.\n\nReplace it with a new copy of the original "
+                    f"plus the hours of {sheet_name}?")
+                if answer != QMessageBox.Yes:
+                    return
+                overwrite = True
+
+            def done(path):
+                QMessageBox.information(
+                    self, "Hours to Excel",
+                    f"Written and checked: {len(values)} hour cells, {len(notes)} notes.\n\n{path}\n\n"
+                    "Excel recalculates the totals when the copy is opened.")
+
+            self.run_db_task(
+                lambda: self._hours_step(hours_export.write_copy, filepath, sheet, values, notes, overwrite=overwrite),
+                on_finished=lambda result: self._hours_result(result, done),
+            )
+
+        self.run_db_task(lambda: self._hours_step(hours_export.read_day_sheet, filepath, sheet_name),
+                         on_finished=lambda result: self._hours_result(result, show_preview))
+
+    @staticmethod
+    def _hours_step(func, *args, **kwargs):
+        """Błędy pliku godzin wracają jako tekst (własny komunikat zamiast „Database Error")."""
+        try:
+            return True, func(*args, **kwargs)
+        except PermissionError:
+            return False, "The file is open in Excel or there is no write permission.\nClose the copy and try again."
+        except Exception as exc:  # noqa: BLE001 – każdy błąd ma trafić do użytkownika
+            return False, str(exc)
+
+    def _hours_result(self, result, on_success):
+        ok, value = result
+        if ok:
+            on_success(value)
+        else:
+            QMessageBox.warning(self, "Hours to Excel", f"Nothing was written.\n\n{value}")
 
     def print_table(self):
         rows = self.visible_rows()
