@@ -13,12 +13,16 @@ a główne okno zapisuje w bazie (Ctrl+Z cofa).
 import json
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QEvent, QMimeData, QSettings, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEasingCurve, QEvent, QMimeData, QPointF, QSettings, QSize, Qt, QTimer, QVariantAnimation, Signal,
+)
 from PySide6.QtGui import QBrush, QColor, QDrag
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QFrame,
+    QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -64,9 +68,9 @@ Wrong time? Right-click the card → <i>Change time…</i>. Mistake? → <i>Back
 <p><b>⏮ From start of shift:</b> for changes the helpdesk hears about late (e.g. someone was on
 another department since the start). While it is ON (orange bar), a drop changes the department
 from the start of the shift. It switches off by itself 30 minutes after the shift starts.</p>
-<p><b>Arrange board:</b> drag a block by its title onto another block in the same column to change the
-order (only on this computer; <i>Reset layout</i> = back to the default). People cannot be moved while it is on.
-<br>New / renamed zones and halls: ⋯ → <i>Edit zones…</i> (for everyone).</p>
+<p><b>Move a whole block:</b> grab it by its <b>title</b> and drop it onto another block in the same column
+(the blocks you can use lift up). The order is kept on this computer only; ⋯ → <i>Reset board layout</i> = back
+to the default. New / renamed zones and halls: ⋯ → <i>Edit zones…</i> (for everyone).</p>
 <p><b>Ctrl+Z</b> undoes the last change. Click a hall header to fold it.</p>
 """
 
@@ -305,6 +309,7 @@ class DropZone(QFrame):
     action_requested = Signal(str, list, str)           # akcja, ids, pozycja tej strefy
     drag_state = Signal(bool)
     zone_moved = Signal(str, str, str)                  # kolumna, przenoszony klocek, klocek docelowy
+    zone_drag = Signal(str, str, bool)                  # kolumna, klocek, True = start / False = koniec
 
     def __init__(self, title, department, position="", accepts_drops=True, fit=True, min_rows=1,
                  show_leave=False, parent=None):
@@ -313,9 +318,9 @@ class DropZone(QFrame):
         self.department = department
         self.position = position
         self.accepts_drops = accepts_drops
-        self.column_key = ""      # kolumna tablicy (do układania klocków); '' = poza tablicą
-        self.arranging = False
+        self.column_key = ""      # kolumna tablicy (klocek da się przenieść za nagłówek); '' = poza tablicą
         self._press_pos = None
+        self._lift_animation = None
         self.fit = fit            # True: wysokość dopasowana do liczby kart (bez przewijania)
         self.min_rows = min_rows
         self.show_leave = show_leave  # Ziek / Naar Huis: godzina wyjścia na karcie
@@ -348,21 +353,16 @@ class DropZone(QFrame):
     def ids(self):
         return [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())]
 
-    # ------------------------------------------------ układanie klocków (Arrange board)
-    def set_arranging(self, on):
-        """Tryb układania: klocek łapie się za nagłówek; kart osób nie da się wtedy przeciągać."""
-        self.arranging = on
-        self.list.setDragEnabled(not on)
-        self.list.setAcceptDrops(self.accepts_drops and not on)
-        self.setAcceptDrops(on)
-        self.title_label.setCursor(Qt.OpenHandCursor if on else Qt.ArrowCursor)
-        self.title_label.setToolTip("Drag onto another block to move it" if on else "")
-        self.setProperty("arranging", on)
-        self.style().unpolish(self)
-        self.style().polish(self)
+    # ------------------------------------------------ przenoszenie klocka za nagłówek
+    def enable_block_drag(self, column_key):
+        """Klocek tablicy: złapany za nagłówek przenosi się w obrębie kolumny (karty osób działają jak zwykle)."""
+        self.column_key = column_key
+        self.setAcceptDrops(True)       # karty osób odbiera lista; klocki – ramka (zdarzenie przechodzi wyżej)
+        self.title_label.setCursor(Qt.OpenHandCursor)
+        self.title_label.setToolTip("Drag the title to move this block")
 
     def eventFilter(self, obj, event):
-        if obj is self.title_label and self.arranging:
+        if obj is self.title_label and self.column_key:
             if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                 self._press_pos = event.position().toPoint()
                 return True
@@ -376,6 +376,42 @@ class DropZone(QFrame):
                 self._press_pos = None
         return super().eventFilter(obj, event)
 
+    def set_lift(self, mode):
+        """Podpowiedź przy przenoszeniu klocka: 'target' = tu można upuścić (unosi się, cień „oddycha"),
+        'source' = przenoszony klocek (przygaszony), None = zwykły wygląd."""
+        if self._lift_animation is not None:
+            self._lift_animation.stop()
+            self._lift_animation = None
+        self.setGraphicsEffect(None)
+        self.setProperty("dropTarget", mode == "target")
+        self.style().unpolish(self)
+        self.style().polish(self)
+        if mode == "source":
+            effect = QGraphicsOpacityEffect(self)
+            effect.setOpacity(0.35)
+            self.setGraphicsEffect(effect)
+        elif mode == "target":
+            shadow = QGraphicsDropShadowEffect(self)
+            shadow.setColor(QColor(theme.color("accent")))
+            shadow.setOffset(QPointF(0, 4))
+            shadow.setBlurRadius(14)
+            self.setGraphicsEffect(shadow)
+            animation = QVariantAnimation(self)
+            animation.setDuration(1400)
+            animation.setStartValue(0.0)
+            animation.setKeyValueAt(0.5, 1.0)
+            animation.setEndValue(0.0)
+            animation.setEasingCurve(QEasingCurve.InOutSine)
+            animation.setLoopCount(-1)
+
+            def breathe(value, effect=shadow):
+                effect.setBlurRadius(10 + 16 * value)
+                effect.setOffset(QPointF(0, 2 + 6 * value))
+
+            animation.valueChanged.connect(breathe)
+            animation.start()
+            self._lift_animation = animation
+
     def _start_zone_drag(self):
         mime = QMimeData()
         mime.setData(ZONE_MIME_TYPE, json.dumps({"column": self.column_key, "title": self.title}).encode("utf-8"))
@@ -383,13 +419,15 @@ class DropZone(QFrame):
         drag.setMimeData(mime)
         drag.setPixmap(self.grab().scaledToWidth(min(self.width(), 160), Qt.SmoothTransformation))
         self.drag_state.emit(True)    # bez przebudowy tablicy w trakcie przeciągania
+        self.zone_drag.emit(self.column_key, self.title, True)
         try:
             drag.exec(Qt.MoveAction)
         finally:
+            self.zone_drag.emit(self.column_key, self.title, False)
             self.drag_state.emit(False)
 
     def _zone_payload(self, event):
-        if not (self.arranging and event.mimeData().hasFormat(ZONE_MIME_TYPE)):
+        if not (self.column_key and event.mimeData().hasFormat(ZONE_MIME_TYPE)):
             return None
         try:
             payload = json.loads(bytes(event.mimeData().data(ZONE_MIME_TYPE)).decode("utf-8"))
@@ -471,8 +509,9 @@ class Column(QFrame):
         self.title = title
         self.zones = zones
         self.key = key
-        for zone in zones:
-            zone.column_key = key
+        if key:
+            for zone in zones:
+                zone.enable_block_drag(key)
         self.icon_name = icon_name
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -612,19 +651,6 @@ class MonitoringView(QWidget):
             self.from_start_button.text()) + 60)
         self.from_start_button.toggled.connect(self._set_from_start)
 
-        self.arrange_button = QPushButton("Arrange board")
-        self.arrange_button.setCheckable(True)
-        self.arrange_button.setCursor(Qt.PointingHandCursor)
-        self.arrange_button.setIconSize(QSize(18, 18))
-        self.arrange_button.setToolTip("Change the order of the blocks on this computer:\n"
-                                       "drag a block by its title onto another block in the same column.")
-        self.arrange_button.toggled.connect(self.set_arranging)
-        kpi_bar.addWidget(self.arrange_button)
-        self.reset_layout_button = QPushButton("Reset layout")
-        self.reset_layout_button.setToolTip("Back to the default order (from Edit zones…)")
-        self.reset_layout_button.clicked.connect(self.reset_layout)
-        self.reset_layout_button.setVisible(False)
-        kpi_bar.addWidget(self.reset_layout_button)
         kpi_bar.addWidget(self.from_start_button)
 
         self.help_button = QPushButton()
@@ -647,15 +673,6 @@ class MonitoringView(QWidget):
         self.from_start_timer = QTimer(self)
         self.from_start_timer.timeout.connect(self._check_from_start)
         self.from_start_timer.start(20_000)
-
-        self.arrange_banner = QLabel(
-            "ARRANGE BOARD – drag a block by its title onto another block in the same column. "
-            "People cannot be moved now. Click 'Arrange board' again when you are done.")
-        self.arrange_banner.setWordWrap(True)
-        self.arrange_banner.setStyleSheet(
-            "background-color: #2e86c1; color: #ffffff; font-weight: bold; padding: 7px 12px; border-radius: 7px;")
-        self.arrange_banner.setVisible(False)
-        outer.addWidget(self.arrange_banner)
 
         main = QHBoxLayout()
         main.setSpacing(6)
@@ -722,10 +739,11 @@ class MonitoringView(QWidget):
         for zone in zones:
             self.board_zones.append(zone)
             zone.zone_moved.connect(self.move_zone)
+            zone.zone_drag.connect(self._show_drop_targets)
         return zones
 
     def _build_board(self):
-        """(Prze)budowa hal i klocków: po zmianie stref (Edit zones…) albo ułożenia (Arrange board)."""
+        """(Prze)budowa hal i klocków: po zmianie stref (Edit zones…) albo ułożenia (przeniesiony klocek)."""
         folded = {name: not hall.header.isChecked() for name, hall in self.halls.items()}
         for zone in self.board_zones:
             if zone in self.all_zones:
@@ -775,8 +793,6 @@ class MonitoringView(QWidget):
         self.board_layout.insertWidget(0, body)
         self.board_body = body
         self._zones_signature = zones_snapshot()
-        for zone in self.board_zones:
-            zone.set_arranging(self.arrange_button.isChecked())
         for column in self.columns:
             column.refresh_theme()
 
@@ -802,14 +818,13 @@ class MonitoringView(QWidget):
         self._build_board()
         self.set_employees(self.employees, force=True)
 
-    def set_arranging(self, on):
-        if self.arrange_button.isChecked() != on:
-            self.arrange_button.setChecked(on)   # wywoła tę metodę jeszcze raz
-            return
-        self.arrange_banner.setVisible(on)
-        self.reset_layout_button.setVisible(on)
+    def _show_drop_targets(self, key, title, started):
+        """Przenoszony klocek przygasa, a klocki tej samej kolumny (tam można go upuścić) się unoszą."""
         for zone in self.board_zones:
-            zone.set_arranging(on)
+            if not started or zone.column_key != key:
+                zone.set_lift(None)
+            else:
+                zone.set_lift("source" if zone.title == title else "target")
 
     # ------------------------------------------------------------- budowa
     def _connect(self, zone):
@@ -862,7 +877,6 @@ class MonitoringView(QWidget):
     def refresh_theme(self):
         """Ikony w kolorach bieżącego motywu (po zmianie jasny / ciemny)."""
         self.from_start_button.setIcon(theme.icon("from_start", checked_key="black"))
-        self.arrange_button.setIcon(theme.icon("move"))
         self.help_button.setIcon(theme.icon("help"))
         self.group_button.setIcon(theme.icon("bulk"))
         for column in self.columns:

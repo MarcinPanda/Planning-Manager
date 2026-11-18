@@ -1,4 +1,4 @@
-"""Etap 4: strefy w bazie (Edit zones…) i ułożenie klocków tablicy (Arrange board)."""
+"""Etap 4: strefy w bazie (Edit zones…) i ułożenie klocków tablicy (klocek za nagłówek)."""
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
@@ -107,7 +107,7 @@ def test_order_helpers():
     assert move_before(["A", "B"], "A", "A") == ["A", "B"]
 
 
-def test_arrange_board_moves_and_resets(temp_db, app):
+def test_block_order_is_kept_and_reset(temp_db, app):
     store = MemoryLayoutStore()
     view = MonitoringView(layout_store=store)
     key = "North:Reachtruck"
@@ -127,13 +127,50 @@ def test_arrange_board_moves_and_resets(temp_db, app):
     assert view.zone_order(key) == default and store.data == {}
 
 
-def test_arrange_mode_blocks_moving_people(temp_db, app):
+def _send_block_drop(widget, key, title, app):
+    """Upuszczenie klocka na widżet (np. listę osób innego klocka) – tak jak robi to Qt przy przeciąganiu."""
+    import json
+    from PySide6.QtCore import QMimeData, QPoint
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+    from pm.monitoring import ZONE_MIME_TYPE
+
+    mime = QMimeData()
+    mime.setData(ZONE_MIME_TYPE, json.dumps({"column": key, "title": title}).encode("utf-8"))
+    point = QPoint(5, 5)
+    enter = QDragEnterEvent(point, Qt.MoveAction, mime, Qt.LeftButton, Qt.NoModifier)
+    app.sendEvent(widget, enter)
+    drop = QDropEvent(point, Qt.MoveAction, mime, Qt.LeftButton, Qt.NoModifier)
+    app.sendEvent(widget, drop)
+    return enter.isAccepted(), drop.isAccepted()
+
+
+def test_block_moves_by_title_without_any_mode(temp_db, app):
     view = MonitoringView(layout_store=MemoryLayoutStore())
-    zone = view.position_zones[("Reachtruck", "Noord")]
-    view.set_arranging(True)
-    assert not zone.list.dragEnabled() and not zone.list.acceptDrops() and zone.acceptDrops()
-    view.set_arranging(False)
-    assert zone.list.dragEnabled() and zone.list.acceptDrops() and not zone.acceptDrops()
+    key = "North:Reachtruck"
+    target = view.position_zones[("Reachtruck", "Extra")]
+    # karty osób działają jak zwykle, a klocek przyjmuje upuszczony klocek nawet nad listą osób
+    assert target.list.dragEnabled() and target.list.acceptDrops() and target.acceptDrops()
+    assert _send_block_drop(target.list.viewport(), key, "Noord", app) == (True, True)
+    app.processEvents()
+    assert view.zone_order(key).index("Noord") == 4
+
+    # klocek z innej kolumny – nie
+    picking = view.position_zones[("Orderpicker", "Choco (12)")]
+    assert _send_block_drop(picking.list.viewport(), key, "Replenish", app)[1] is False
+
+
+def test_dragging_a_block_lifts_the_others_in_its_column(temp_db, app):
+    view = MonitoringView(layout_store=MemoryLayoutStore())
+    source = view.position_zones[("Reachtruck", "Noord")]
+    other = view.position_zones[("Reachtruck", "Extra")]
+    picking = view.position_zones[("Orderpicker", "Choco (12)")]
+    view._show_drop_targets("North:Reachtruck", "Noord", True)
+    assert other.property("dropTarget") and other.graphicsEffect() is not None
+    assert not source.property("dropTarget") and source.graphicsEffect() is not None   # przygaszony
+    assert picking.graphicsEffect() is None
+    view._show_drop_targets("North:Reachtruck", "Noord", False)
+    assert other.graphicsEffect() is None and not other.property("dropTarget")
+    assert source.graphicsEffect() is None
 
 
 def test_board_follows_zone_changes(temp_db, app):

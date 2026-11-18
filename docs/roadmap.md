@@ -83,7 +83,8 @@ co aplikacja** (tak jest domyślnie, bez żadnego ustawiania). Inne miejsce na b
 
 ## Etap 4 – tablica do ułożenia po swojemu ✅ (punkty 1–2 zrobione 18.11 – do sprawdzenia w pracy)
 
-Zrobione: tabela `zones` w bazie, ⋯ → *Edit zones…*, tryb *Arrange board* + *Reset layout*. Strefa po zmianie
+Zrobione: tabela `zones` w bazie, ⋯ → *Edit zones…*, klocki przenoszone za nazwę zawsze (bez trybu, ustalone 18.11)
++ efekt unoszenia miejsc docelowych, ⋯ → *Reset board layout*. Strefa po zmianie
 nazwy na komputerze z własnym ułożeniem trafia na koniec kolumny (wystarczy ją przestawić). Punkt 3 – do decyzji.
 
 1. **Edycja stref i klientów** (⚙ → „Edit zones…", schowane):

@@ -594,10 +594,11 @@ class MainWindow(QMainWindow):
             ])
         layout.addWidget(self.export_button)
 
-        self.more_button, (self.theme_action, self.zones_action, self.db_action, self.clear_action) = \
-            self._menu_tool("settings", "", [
+        self.more_button, (self.theme_action, self.zones_action, self.reset_board_action, self.db_action,
+                           self.clear_action) = self._menu_tool("settings", "", [
                 ("settings", "Switch to light theme", self.toggle_theme),
                 ("edit_zones", "Edit zones…", self.edit_zones),
+                ("move", "Reset board layout (this computer)", self.reset_board_layout),
                 ("database", "Database location…", self.choose_database_folder),
                 None,
                 ("clear", "Delete this shift…", self.clear_data),
@@ -645,6 +646,15 @@ class MainWindow(QMainWindow):
             return
         db.current_shift_id = shift_id
         self.refresh_data()
+
+    def reset_board_layout(self):
+        """Kolejność klocków na Monitoringu z powrotem jak w Edit zones (tylko ten komputer)."""
+        answer = QMessageBox.question(
+            self, "Reset board layout",
+            "Put all blocks on the Monitoring board back in the default order (from Edit zones…)?\n"
+            "This only changes this computer.")
+        if answer == QMessageBox.Yes and self.monitoring_view is not None:
+            self.monitoring_view.reset_layout()
 
     def edit_zones(self):
         """⋯ → Edit zones…: strefy Reach / Picking, wspólne dla wszystkich komputerów."""
