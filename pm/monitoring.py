@@ -14,14 +14,13 @@ import json
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import (
-    QEasingCurve, QEvent, QMimeData, QPointF, QSettings, QSize, Qt, QTimer, QVariantAnimation, Signal,
+    QEasingCurve, QEvent, QMimeData, QSettings, QSize, Qt, QTimer, QVariantAnimation, Signal,
 )
 from PySide6.QtGui import QBrush, QColor, QDrag
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QFrame,
-    QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
@@ -377,12 +376,13 @@ class DropZone(QFrame):
         return super().eventFilter(obj, event)
 
     def set_lift(self, mode):
-        """Podpowiedź przy przenoszeniu klocka: 'target' = tu można upuścić (unosi się, cień „oddycha"),
+        """Podpowiedź przy przenoszeniu klocka: 'target' = tu można upuścić (pulsujące podświetlenie ramki),
         'source' = przenoszony klocek (przygaszony), None = zwykły wygląd."""
         if self._lift_animation is not None:
             self._lift_animation.stop()
             self._lift_animation = None
         self.setGraphicsEffect(None)
+        self.setStyleSheet("")
         self.setProperty("dropTarget", mode == "target")
         self.style().unpolish(self)
         self.style().polish(self)
@@ -391,11 +391,7 @@ class DropZone(QFrame):
             effect.setOpacity(0.35)
             self.setGraphicsEffect(effect)
         elif mode == "target":
-            shadow = QGraphicsDropShadowEffect(self)
-            shadow.setColor(QColor(theme.color("accent")))
-            shadow.setOffset(QPointF(0, 4))
-            shadow.setBlurRadius(14)
-            self.setGraphicsEffect(shadow)
+            accent = QColor(theme.color("accent"))
             animation = QVariantAnimation(self)
             animation.setDuration(1400)
             animation.setStartValue(0.0)
@@ -404,10 +400,15 @@ class DropZone(QFrame):
             animation.setEasingCurve(QEasingCurve.InOutSine)
             animation.setLoopCount(-1)
 
-            def breathe(value, effect=shadow):
-                effect.setBlurRadius(10 + 16 * value)
-                effect.setOffset(QPointF(0, 2 + 6 * value))
+            def breathe(value, c=accent):
+                # ramka i delikatne tło w kolorze motywu – jaśniej / ciemniej, nic się nie przesuwa
+                border = f"rgba({c.red()}, {c.green()}, {c.blue()}, {int(90 + 165 * value)})"
+                fill = f"rgba({c.red()}, {c.green()}, {c.blue()}, {int(10 + 40 * value)})"
+                self.setStyleSheet(f"DropZone {{ border: 2px solid {border}; border-radius: 8px; background-color: {fill}; }}"
+                                   f"DropZone[hover=\"true\"] {{ border: 2px solid rgb({c.red()}, {c.green()},"
+                                   f" {c.blue()}); }}")
 
+            breathe(0.0)
             animation.valueChanged.connect(breathe)
             animation.start()
             self._lift_animation = animation
