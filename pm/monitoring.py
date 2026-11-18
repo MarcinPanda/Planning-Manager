@@ -11,12 +11,13 @@ z Ctrl = dołożenie drugiej strefy. Widok niczego sam nie zapisuje – wysyła 
 a główne okno zapisuje w bazie (Ctrl+Z cofa).
 """
 import json
+import re
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import (
     QEvent, QMimeData, QPointF, QSettings, QSize, Qt, QTimer, Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QDrag, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QDrag, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -317,6 +318,106 @@ class EmployeeList(QListWidget):
             self.dropped.emit(ids, from_position, add)
 
 
+ZONE_CODE = re.compile(r"^(.*?)\s*\(([^()]*)\)\s*$")
+
+
+def split_zone_code(title):
+    """„Choco (12)" -> ("Choco", "12"): numer zony w systemie (Sturing wpisuje go pracownikowi)."""
+    match = ZONE_CODE.match(title)
+    return (match.group(1), match.group(2).strip()) if match else (title, "")
+
+
+def person_pixmap(color, size=12):
+    """Mała ikonka ludzika (głowa + ramiona) w kolorze motywu – przy liczbie osób w klocku."""
+    ratio = 2
+    pixmap = QPixmap(size * ratio, size * ratio)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.scale(ratio, ratio)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor(color))
+    painter.drawEllipse(QPointF(size / 2, size * 0.30), size * 0.22, size * 0.22)
+    body = QPainterPath()
+    body.moveTo(size * 0.12, size * 0.98)
+    body.cubicTo(size * 0.12, size * 0.58, size * 0.88, size * 0.58, size * 0.88, size * 0.98)
+    body.closeSubpath()
+    painter.drawPath(body)
+    painter.end()
+    pixmap.setDevicePixelRatio(ratio)
+    return pixmap
+
+
+class ZoneHeader(QWidget):
+    """Nagłówek klocka: nazwa, obok ludzik z liczbą osób (zawsze, także 0), pod nazwą [numer zony]."""
+
+    def __init__(self, title, parent=None):
+        super().__init__(parent)
+        name, code = split_zone_code(title)
+        self.code = code
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(5)
+        outer.addStretch(1)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(0)
+        self.name_label = QLabel(name.replace("/", "/\u200b"))   # miejsce na złamanie linii po „/"
+        self.name_label.setObjectName("zoneTitle")
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self.name_label.setWordWrap(True)
+        self.name_label.setMinimumWidth(10)
+        texts.addWidget(self.name_label)
+        self.code_label = QLabel(f"[{code}]")
+        self.code_label.setObjectName("zoneCode")
+        self.code_label.setAlignment(Qt.AlignCenter)
+        self.code_label.setVisible(bool(code))
+        texts.addWidget(self.code_label)
+        outer.addLayout(texts)
+
+        people = QWidget()
+        people_layout = QHBoxLayout(people)
+        people_layout.setContentsMargins(0, 2, 0, 0)
+        people_layout.setSpacing(2)
+        self.icon_label = QLabel()
+        self.count_label = QLabel("0")
+        self.count_label.setObjectName("zoneCount")
+        people_layout.addWidget(self.icon_label)
+        people_layout.addWidget(self.count_label)
+        people.setToolTip("Employees in this block")
+        outer.addWidget(people, 0, Qt.AlignTop)
+        outer.addStretch(1)
+        self.refresh_theme()
+
+        self._people = people
+
+    def resizeEvent(self, event):
+        """Nazwa łamie się tylko wtedy, gdy obok ludzika z liczbą naprawdę się nie mieści."""
+        super().resizeEvent(event)
+        text = self.name_label.text().replace("​", "")
+        natural = self.name_label.fontMetrics().horizontalAdvance(text) + 4
+        margins = self.contentsMargins()
+        available = (self.width() - margins.left() - margins.right() - self._people.sizeHint().width()
+                     - self.layout().spacing())
+        self.name_label.setFixedWidth(max(10, min(natural, available)))
+
+    @property
+    def has_code(self):
+        return bool(self.code)
+
+    def reserve_code_line(self):
+        """Pusty wiersz w miejscu numeru zony – wszystkie klocki kolumny mają wtedy tę samą wysokość."""
+        if not self.code:
+            self.code_label.setText(" ")
+            self.code_label.setVisible(True)
+
+    def set_count(self, count):
+        self.count_label.setText(str(count))
+
+    def refresh_theme(self):
+        self.icon_label.setPixmap(person_pixmap(theme.color("muted")))
+
+
 class CloseGlyphButton(QToolButton):
     """Krzyżyk do usuwania klocka, rysowany kreskami: spokojny w kolorze tekstu pomocniczego,
     na czerwono dopiero po najechaniu (jak przyciski zamykania w edytorach)."""
@@ -389,11 +490,7 @@ class DropZone(QFrame):
         layout.setContentsMargins(3, 3, 3, 3)
         layout.setSpacing(2)
 
-        self.title_label = QLabel(title)
-        self.title_label.setObjectName("zoneTitle")
-        self.title_label.setAlignment(Qt.AlignCenter)
-        self.title_label.setWordWrap(True)   # długie nazwy (Kantel/Consolidatie) w dwóch liniach zamiast ucięcia
-        self.title_label.setMinimumWidth(10)
+        self.title_label = ZoneHeader(title)   # nazwa, ludzik z liczbą osób, [numer zony]
         self.title_label.installEventFilter(self)
         layout.addWidget(self.title_label)
 
@@ -467,10 +564,16 @@ class DropZone(QFrame):
     def apply_frame(self):
         """Ramka klocka: zawsze 2 px (zmienia się tylko kolor), więc podświetlenie niczego nie przesuwa."""
         lit = self._frame_mode == "target" or self._hover
+        self.title_label.refresh_theme()
         color = theme.color("accent") if lit else theme.color("border")
         self.setStyleSheet(f"DropZone {{ background-color: {theme.color('surface')}; border: 2px solid {color};"
                            " border-radius: 8px; }"
                            "QLabel#zoneTitle { font-weight: 700; background: transparent; border: none; }"
+                           f"QLabel#zoneCode {{ font-size: 8pt; color: {theme.color('muted')}; background: transparent;"
+                           " border: none; }"
+                           f"QLabel#zoneCount {{ color: {theme.color('muted')}; font-weight: 600; background: transparent;"
+                           " border: none; }"
+                           "QLabel { background: transparent; border: none; }"
                            "QListWidget { background: transparent; border: none; }")
 
     def set_lift(self, mode):
@@ -569,25 +672,24 @@ class DropZone(QFrame):
             self.list.addItem(item)
 
         count = len(employees)
-        title = self.title.replace("/", "/​")   # miejsce na złamanie linii po „/"
-        self.title_label.setText(f"{title}  ({count})" if count else title)
+        self.title_label.set_count(count)
         self._fit_height(count)
 
 
-_EMPTY_ZONE_HEIGHT = []
+_EMPTY_ZONE_HEIGHT = {}
 
 
-def empty_zone_height():
-    """Wysokość pustego klocka z jednowierszową nazwą (mierzona na prawdziwym klocku, z motywem)."""
-    if not _EMPTY_ZONE_HEIGHT:
-        probe = DropZone("Probe", "", "")
+def empty_zone_height(with_code=False):
+    """Wysokość pustego klocka z jednowierszową nazwą (i wierszem [numer zony]) – mierzona na prawdziwym klocku."""
+    if with_code not in _EMPTY_ZONE_HEIGHT:
+        probe = DropZone("Probe (1)" if with_code else "Probe", "", "")
         probe.enable_block_drag("probe")
-        probe.ensurePolished()
-        probe.title_label.ensurePolished()
-        probe.list.ensurePolished()
-        _EMPTY_ZONE_HEIGHT.append(probe.sizeHint().height())
+        for widget in (probe, probe.title_label, probe.title_label.name_label, probe.title_label.code_label,
+                       probe.list):
+            widget.ensurePolished()
+        _EMPTY_ZONE_HEIGHT[with_code] = probe.sizeHint().height()
         probe.deleteLater()
-    return _EMPTY_ZONE_HEIGHT[0]
+    return _EMPTY_ZONE_HEIGHT[with_code]
 
 
 class AddBlockTile(QFrame):
@@ -595,13 +697,13 @@ class AddBlockTile(QFrame):
 
     clicked = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, with_code=False, parent=None):
         super().__init__(parent)
         self.setObjectName("addBlockTile")
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip("Add a new block here")
         self.setMinimumWidth(60)
-        self.setFixedHeight(empty_zone_height())
+        self.setFixedHeight(empty_zone_height(with_code))
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(3, 3, 3, 3)
@@ -646,6 +748,9 @@ class Column(QFrame):
         if key:
             for zone in zones:
                 zone.enable_block_drag(key)
+            if any(zone.title_label.has_code for zone in zones):
+                for zone in zones:
+                    zone.title_label.reserve_code_line()
         self.icon_name = icon_name
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -680,7 +785,8 @@ class Column(QFrame):
             grid.addWidget(zone, index // grid_columns, index % grid_columns, Qt.AlignTop)
             zone.remove_clicked.connect(lambda z=zone: self.remove_requested.emit(self.key, z))
         if key:
-            self.add_tile = AddBlockTile()
+            # tej samej wysokości co pusty klocek tej kolumny (z wierszem [numer zony], gdy kolumna go ma)
+            self.add_tile = AddBlockTile(any(zone.title_label.has_code for zone in zones))
             self.add_tile.clicked.connect(lambda: self.add_requested.emit(self.key))
             index = len(zones)
             grid.addWidget(self.add_tile, index // grid_columns, index % grid_columns, Qt.AlignTop)
