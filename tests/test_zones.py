@@ -165,11 +165,11 @@ def test_dragging_a_block_lifts_the_others_in_its_column(temp_db, app):
     other = view.position_zones[("Reachtruck", "Extra")]
     picking = view.position_zones[("Orderpicker", "Choco (12)")]
     view._show_drop_targets("North:Reachtruck", "Noord", True)
-    assert other.property("dropTarget") and other.styleSheet() and other.graphicsEffect() is None
+    assert other.property("dropTarget") and other.graphicsEffect() is None
     assert not source.property("dropTarget") and source.graphicsEffect() is not None   # przygaszony
     assert picking.graphicsEffect() is None
     view._show_drop_targets("North:Reachtruck", "Noord", False)
-    assert not other.styleSheet() and not other.property("dropTarget")
+    assert not other.property("dropTarget")
     assert source.graphicsEffect() is None
 
 

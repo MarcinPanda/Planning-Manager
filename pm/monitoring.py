@@ -14,7 +14,7 @@ import json
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import (
-    QEasingCurve, QEvent, QMimeData, QSettings, QSize, Qt, QTimer, QVariantAnimation, Signal,
+    QEvent, QMimeData, QSettings, QSize, Qt, QTimer, Signal,
 )
 from PySide6.QtGui import QBrush, QColor, QDrag
 from PySide6.QtWidgets import (
@@ -319,7 +319,6 @@ class DropZone(QFrame):
         self.accepts_drops = accepts_drops
         self.column_key = ""      # kolumna tablicy (klocek da się przenieść za nagłówek); '' = poza tablicą
         self._press_pos = None
-        self._lift_animation = None
         self.fit = fit            # True: wysokość dopasowana do liczby kart (bez przewijania)
         self.min_rows = min_rows
         self.show_leave = show_leave  # Ziek / Naar Huis: godzina wyjścia na karcie
@@ -376,42 +375,17 @@ class DropZone(QFrame):
         return super().eventFilter(obj, event)
 
     def set_lift(self, mode):
-        """Podpowiedź przy przenoszeniu klocka: 'target' = tu można upuścić (pulsujące podświetlenie ramki),
+        """Podpowiedź przy przenoszeniu klocka: 'target' = tu można upuścić (niebieska ramka dookoła),
         'source' = przenoszony klocek (przygaszony), None = zwykły wygląd."""
-        if self._lift_animation is not None:
-            self._lift_animation.stop()
-            self._lift_animation = None
         self.setGraphicsEffect(None)
-        self.setStyleSheet("")
         self.setProperty("dropTarget", mode == "target")
-        self.style().unpolish(self)
-        self.style().polish(self)
+        accent = theme.color("accent")
+        self.setStyleSheet(f"DropZone {{ border: 2px solid {accent}; border-radius: 8px; }}"
+                           if mode == "target" else "")
         if mode == "source":
             effect = QGraphicsOpacityEffect(self)
             effect.setOpacity(0.35)
             self.setGraphicsEffect(effect)
-        elif mode == "target":
-            accent = QColor(theme.color("accent"))
-            animation = QVariantAnimation(self)
-            animation.setDuration(1400)
-            animation.setStartValue(0.0)
-            animation.setKeyValueAt(0.5, 1.0)
-            animation.setEndValue(0.0)
-            animation.setEasingCurve(QEasingCurve.InOutSine)
-            animation.setLoopCount(-1)
-
-            def breathe(value, c=accent):
-                # ramka i delikatne tło w kolorze motywu – jaśniej / ciemniej, nic się nie przesuwa
-                border = f"rgba({c.red()}, {c.green()}, {c.blue()}, {int(90 + 165 * value)})"
-                fill = f"rgba({c.red()}, {c.green()}, {c.blue()}, {int(10 + 40 * value)})"
-                self.setStyleSheet(f"DropZone {{ border: 2px solid {border}; border-radius: 8px; background-color: {fill}; }}"
-                                   f"DropZone[hover=\"true\"] {{ border: 2px solid rgb({c.red()}, {c.green()},"
-                                   f" {c.blue()}); }}")
-
-            breathe(0.0)
-            animation.valueChanged.connect(breathe)
-            animation.start()
-            self._lift_animation = animation
 
     def _start_zone_drag(self):
         mime = QMimeData()

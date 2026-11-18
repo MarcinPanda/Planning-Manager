@@ -174,7 +174,6 @@ QLabel#kpi {{ background-color: {p['surface2']}; border: 1px solid {p['border']}
 
 /* ---- tablica Monitoring ---- */
 DropZone {{ background-color: {p['surface']}; border: 1px solid {p['border']}; border-radius: 8px; }}
-DropZone[dropTarget="true"] {{ border: 1px dashed {p['accent']}; }}
 DropZone[hover="true"] {{ border: 2px solid {p['accent']}; }}
 DropZone QLabel#zoneTitle {{ font-weight: 700; }}
 DropZone QListWidget {{ background: transparent; border: none; }}
