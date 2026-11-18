@@ -181,3 +181,43 @@ def test_second_shift_is_added_to_existing_copy(week_file):
     with pytest.raises(hx.HoursFileError):
         hx.write_copy(copy, sheet2, {(4, "H"): 1.0}, {}, dst=week_file, overwrite=True, original=week_file)
     assert hx.original_path(copy) == week_file
+
+
+# ------------------------------------------------------------------ strefa Reflex z godzinami
+def test_reflex_zone_periods_are_recorded(temp_db):
+    from datetime import datetime
+
+    from pm import db
+    from conftest import make_employee
+
+    emp_id = make_employee("Kowalski", "Jan", department="Reachtruck", work_hours="15:00-00:00", shift="Middag")
+    db.set_positions_in_db(emp_id, ["Reflex"])
+    now = datetime.now().strftime("%H:%M")
+    periods = db.zone_periods([emp_id])[emp_id]
+    assert len(periods) == 1 and periods[0][1] is None
+    assert periods[0][0] in (now, (datetime.now()).strftime("%H:%M"))
+    db.set_positions_in_db(emp_id, ["Zuid"])
+    assert db.zone_periods([emp_id])[emp_id][0][1] is not None      # wyszedł ze strefy
+    db.set_positions_in_db(emp_id, ["Zuid", "Reflex"])
+    assert len(db.zone_periods([emp_id])[emp_id]) == 2               # wszedł drugi raz
+
+
+def test_reflex_from_start_of_shift(temp_db):
+    from pm import db
+    from conftest import make_employee
+
+    emp_id = make_employee("Kowalski", "Jan", department="Reachtruck", work_hours="15:00-00:00", shift="Middag")
+    db.move_employees_in_db([emp_id], "Orderpicker", "Reflex", from_start=True)
+    assert db.zone_periods([emp_id])[emp_id] == [("", None)]
+
+
+def test_reflex_hours_go_to_department_with_note(week_file):
+    sheet = hx.read_day_sheet(week_file, "Woensdag")
+    emp = employee("Kowalski", "Jan", [("Orderpicker", "")])
+    emp.employee_id = 7
+    assert hx.zone_hours(emp, [("", "18:00")]) == 2.75                  # 15:00–18:00 minus przerwa 17:15
+    assert hx.zone_hours(emp, [("20:00", None)]) == 3.75                # 20:00–00:00 minus 22:00–22:15
+    lines = hx.propose([emp], sheet, zones={7: [("", "18:00")]})
+    values, notes, _ = hx.build_changes(lines, sheet)
+    assert values == {(2, "F"): 8.0}                                     # godziny zostają w Orderpicking
+    assert notes[2] == "late / 2.75h reflex"

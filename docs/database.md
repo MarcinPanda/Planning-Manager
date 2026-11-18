@@ -32,6 +32,7 @@ Wersja układu: `PRAGMA user_version` (obecnie 2). Program sam przenosi starsze 
 | `consolidation` | lista RIT-ów | `datum`, `rit`, `seq`, `area`, `time`, `amount`, `kantel`, `reachers` (loginy lub `id:N`, `;`), `v`, `done`, `lane`, `comment`, `busy` |
 | `consolidation_prev` | strefy reachera sprzed RIT-u | `employee_id`, `positions` |
 | `change_log` | dziennik zmian (kto, kiedy, co) + dane do Cofnij | `ts`, `user`, `action`, `details`, `undo_data`, `undone` |
+| `zone_periods` | kiedy osoba weszła do strefy Reflex i z niej wyszła (zapisują to wyzwalacze przy każdej zmianie `employees.position`) | `employee_id`, `zone`, `time_from` (HH:MM, pusty = od początku zmiany), `time_to` (NULL = nadal w strefie) |
 | `meta` | licznik zmian | `key = 'changes'`, `value` |
 
 ## Przykład: kto jest teraz w pracy i na jakim dziale

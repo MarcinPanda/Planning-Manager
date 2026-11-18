@@ -134,9 +134,8 @@ pliku tygodnia 47: 50 komórek, prawdziwy Excel otwiera kopię bez naprawy, sumy
 Ustalenia 18.11: Buffer → Orderpicking + dopisek „Xh Buffer"; Fixing Pallets → Herstelplein (VAL); Extra → pytanie
 o kolumnę. Kolejna zmiana tego samego tygodnia dopisuje się do istniejącej kopii.
 Otwarte:
-- **Reflex** (inny system; praca Picking / Reach / Consolidatie / Kantelen). Propozycja: Reflex jako *strefa* w
-  Monitoringu (już jest w South), a godziny idą do działu osoby z dopiskiem „Xh reflex". Wymaga zapisywania godziny
-  wejścia i wyjścia ze strefy (dziś strefy nie mają godzin).
+- ✅ **Reflex** (18.11): strefa z godzinami wejścia / wyjścia (tabela `zone_periods`); godziny w dziale osoby +
+  dopisek „Xh reflex". Do dodania później: poprawianie tych godzin ręcznie (jak godzina Naar Huis).
 - **Docelowo zapis do oryginału** zamiast kopii, gdy testy wypadną dobrze: z kopią zapasową przed zapisem i
   sprawdzeniem, czy nikt nie ma pliku otwartego (plik jest współdzielony).
 

@@ -912,8 +912,9 @@ class MainWindow(QMainWindow):
             elif box.clickedButton() is not fresh:
                 return
 
-        def show_preview(sheet):
-            lines = hours_export.propose(employees, sheet, remembered_columns())
+        def show_preview(loaded):
+            sheet, zones = loaded
+            lines = hours_export.propose(employees, sheet, remembered_columns(), zones)
             source = "existing copy" if base == target else "original"
             title = (f"{os.path.basename(base)} ({source}) → sheet {sheet_name} "
                      f"({day:%d-%m-%Y}, {shift_name}) → {os.path.basename(target)}")
@@ -935,7 +936,11 @@ class MainWindow(QMainWindow):
                 on_finished=lambda result: self._hours_result(result, done),
             )
 
-        self.run_db_task(lambda: self._hours_step(hours_export.read_day_sheet, base, sheet_name),
+        def load():
+            return (hours_export.read_day_sheet(base, sheet_name),
+                    db.zone_periods(emp.employee_id for emp in employees))
+
+        self.run_db_task(lambda: self._hours_step(load),
                          on_finished=lambda result: self._hours_result(result, show_preview))
 
     @staticmethod

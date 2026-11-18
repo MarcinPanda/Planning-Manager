@@ -19,7 +19,7 @@ from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 from . import config
-from .logic import name_key, round_to_quarter
+from .logic import Validator, compute_hours_with_breaks, interval_hours_with_breaks, name_key, round_to_quarter, to_minutes
 
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 REL_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
@@ -259,14 +259,48 @@ def leave_note(employee):
     return " / ".join(parts)
 
 
-def department_note(intervals):
-    """Dopisek dla działów liczonych w innej kolumnie, np. „3h Buffer"."""
-    parts = []
+def department_note(intervals, zone_hours=0.0):
+    """Dopisek dla działów liczonych w innej kolumnie, np. „3h Buffer", i dla czasu w strefie Reflex."""
+    totals = {}
     for dept, hours in intervals:
         label = config.HOURS_NOTE_DEPARTMENTS.get(dept)
         if label and hours:
-            parts.append(f"{hours:g}h {label}")
-    return " / ".join(parts)
+            totals[label] = totals.get(label, 0.0) + hours
+    if zone_hours:
+        label = config.HOURS_NOTE_DEPARTMENTS.get("Reflex", "reflex")
+        totals[label] = totals.get(label, 0.0) + zone_hours
+    return " / ".join(f"{hours:g}h {label}" for label, hours in totals.items())
+
+
+def zone_hours(employee, periods):
+    """Godziny pracy (z przerwami) w okresach strefy, przycięte do godzin pracy osoby; co 0,25 h."""
+    hours_text = employee.work_hours if isinstance(employee.work_hours, str) else ""
+    if "-" not in hours_text or not periods:
+        return 0.0
+    start_s, end_s = (p.strip() for p in hours_text.split("-", 1))
+    if not (Validator.validate_time_format(start_s) and Validator.validate_time_format(end_s)):
+        return 0.0
+    start, end = to_minutes(start_s), to_minutes(end_s)
+    if end <= start:
+        end += 24 * 60
+
+    def rel(text, default):
+        if not text or not Validator.validate_time_format(text):
+            return default
+        m = to_minutes(text)
+        return m + 24 * 60 if m < start - 6 * 60 else m   # po północy na zmianie nocnej
+
+    total = 0.0
+    for time_from, time_to in periods:
+        s, e = max(rel(time_from, start), start), min(rel(time_to, end), end)
+        if e <= s:
+            continue
+        span = f"{s // 60 % 24:02d}:{s % 60:02d}-{e // 60 % 24:02d}:{e % 60:02d}"
+        if employee.shift == "Custom":
+            total += compute_hours_with_breaks(span, "Custom", employee.custom_breaks)
+        else:
+            total += interval_hours_with_breaks(s % (24 * 60), e % (24 * 60), employee.shift)
+    return round_to_quarter(total)
 
 
 def default_column(department, remembered=None):
@@ -274,8 +308,11 @@ def default_column(department, remembered=None):
     return remembered.get(department) or config.HOURS_COLUMN_MAP.get(department, "")
 
 
-def propose(employees, sheet, remembered=None):
-    """Linie „osoba – dział – kolumna – godziny" do podglądu. Nic nie zapisuje."""
+def propose(employees, sheet, remembered=None, zones=None):
+    """Linie „osoba – dział – kolumna – godziny" do podglądu. Nic nie zapisuje.
+
+    zones = {employee_id: [(od, do)]} – okresy w strefie Reflex (dopisek „Xh reflex")."""
+    zones = zones or {}
     index = match_rows(sheet)
     lines = []
     known = {_norm_header(h) for h in sheet.columns}
@@ -283,7 +320,8 @@ def propose(employees, sheet, remembered=None):
         person = f"{emp.lastname} {emp.firstname}".strip()
         row, problem = find_row(index, name_key(emp.firstname, emp.lastname))
         intervals = [(d, round_to_quarter(h)) for d, h in emp.dept_intervals if round_to_quarter(h) > 0]
-        note = " / ".join(filter(None, [department_note(intervals), leave_note(emp)]))
+        reflex = zone_hours(emp, zones.get(emp.employee_id, []))
+        note = " / ".join(filter(None, [department_note(intervals, reflex), leave_note(emp)]))
         if not intervals:
             dept = emp.active_department or emp.current_department
             intervals = [(dept, 0.0)]

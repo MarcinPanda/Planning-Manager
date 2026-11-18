@@ -95,6 +95,67 @@ def _create_change_tracking(cursor):
             """)
 
 
+ZONE_TIMED = "Reflex"   # strefa, dla której zapamiętujemy godziny wejścia i wyjścia (dopisek w pliku godzin)
+
+
+def _create_zone_periods(cursor):
+    """Okresy w strefie Reflex: wyzwalacze zapisują godzinę, gdy osoba wchodzi do strefy i z niej wychodzi
+    (każda zmiana pola position, także z innych komputerów i starszych wersji programu).
+    time_from = '' -> od początku zmiany; time_to = NULL -> nadal w strefie."""
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS zone_periods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id INTEGER NOT NULL,
+            zone TEXT NOT NULL,
+            time_from TEXT NOT NULL DEFAULT '',
+            time_to TEXT
+        )
+    """)
+    has = "instr(';' || coalesce({0}.position, '') || ';', ';{1};') > 0"
+    new_in, old_in = has.format("new", ZONE_TIMED), has.format("old", ZONE_TIMED)
+    now = "strftime('%H:%M', 'now', 'localtime')"
+    cursor.execute(f"""
+        CREATE TRIGGER IF NOT EXISTS trg_zone_enter AFTER UPDATE OF position ON employees
+        WHEN {new_in} AND NOT {old_in}
+        BEGIN INSERT INTO zone_periods (employee_id, zone, time_from) VALUES (new.id, '{ZONE_TIMED}', {now}); END
+    """)
+    cursor.execute(f"""
+        CREATE TRIGGER IF NOT EXISTS trg_zone_leave AFTER UPDATE OF position ON employees
+        WHEN {old_in} AND NOT {new_in}
+        BEGIN UPDATE zone_periods SET time_to = {now}
+              WHERE employee_id = new.id AND zone = '{ZONE_TIMED}' AND time_to IS NULL; END
+    """)
+    cursor.execute(f"""
+        CREATE TRIGGER IF NOT EXISTS trg_zone_insert AFTER INSERT ON employees
+        WHEN {new_in}
+        BEGIN INSERT INTO zone_periods (employee_id, zone, time_from) VALUES (new.id, '{ZONE_TIMED}', ''); END
+    """)
+    cursor.execute("""
+        CREATE TRIGGER IF NOT EXISTS trg_zone_delete AFTER DELETE ON employees
+        BEGIN DELETE FROM zone_periods WHERE employee_id = old.id; END
+    """)
+
+
+def zone_periods(employee_ids, zone=ZONE_TIMED):
+    """{employee_id: [(od, do)]} – '' = od początku zmiany, None = nadal w strefie."""
+    ids = list(employee_ids)
+    if not ids:
+        return {}
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"SELECT employee_id, time_from, time_to FROM zone_periods "
+            f"WHERE zone = ? AND employee_id IN ({','.join('?' * len(ids))}) ORDER BY id",
+            (zone, *ids),
+        ).fetchall()
+    finally:
+        conn.close()
+    result = {}
+    for emp_id, start, end in rows:
+        result.setdefault(emp_id, []).append((start or "", end))
+    return result
+
+
 def init_db():
     if os.path.exists(config.DB_PATH) and os.path.getsize(config.DB_PATH) > 0 \
             and schema_version() < SCHEMA_VERSION:
@@ -236,6 +297,7 @@ def init_db():
 
     _migrate(cursor)
     _create_change_tracking(cursor)
+    _create_zone_periods(cursor)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_departments_employee_id ON departments(employee_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_employees_name ON employees(lastname, firstname)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_employees_shift ON employees(shift_id)")
@@ -1010,6 +1072,9 @@ def move_employees_in_db(employee_ids, dept, position="", time_chosen=None, from
                     SET department = ?
                     WHERE employee_id = ? AND time_assigned = ''
                 """, (dept, emp_id))
+                cursor.execute(
+                    "UPDATE zone_periods SET time_from = '' WHERE employee_id = ? AND time_to IS NULL",
+                    (emp_id,))
             else:
                 _apply_add_department(cursor, emp, dept, time_chosen, position)
 
