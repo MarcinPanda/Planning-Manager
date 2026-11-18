@@ -3,7 +3,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from pm import db
-from pm.monitoring import MonitoringView
+from pm.monitoring import LEAVE_TIME_ROLE, MonitoringView, leave_time
 
 from conftest import make_employee
 
@@ -131,7 +131,9 @@ def test_view_groups_employees_into_zones(app, temp_db):
     view.zones["Naar Huis"].list.action_requested.emit("time", [c])
     assert leave == [([a], "home"), ([a], "sick")]
     assert actions == [("zones", [a]), ("time", [c])]
-    assert view.zones["Naar Huis"].list.item(0).text().endswith("·  12:00")   # godzina wyjścia na karcie
+    home_card = view.zones["Naar Huis"].list.item(0)
+    assert home_card.data(LEAVE_TIME_ROLE) == "12:00"     # godzina wyjścia osobno: zawsze widoczna po prawej
+    assert "12:00" not in home_card.text()                # w tekście samo imię i nazwisko (to się skraca)
 
     # tryb „od początku zmiany": pasek widoczny, sam się wyłącza po terminie
     view.from_start_button.setChecked(True)
@@ -341,3 +343,16 @@ def test_logins_reader_does_not_need_pandas(temp_db):
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.split("\n")
     assert out[0] == "[('Jan Kowalski', '012')]"
     assert out[1] == "False"
+
+
+def test_leave_time_on_card():
+    """Ziek od początku zmiany – bez godziny; Naar Huis zawsze z godziną."""
+    class Emp:
+        def __init__(self, since, status):
+            self.active_since, self.status = since, status
+            self.planned_hours, self.work_hours = "06:00-14:30", "06:00-14:30"
+
+    assert leave_time(Emp("", "sick")) == ""
+    assert leave_time(Emp("10:15", "sick")) == "10:15"
+    assert leave_time(Emp("12:00", "home")) == "12:00"
+    assert leave_time(Emp("", "home")) == "06:00"      # starszy wpis „cały dzień" – start z planu

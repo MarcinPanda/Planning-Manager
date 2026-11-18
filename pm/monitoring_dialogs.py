@@ -55,9 +55,7 @@ class LeaveDialog(QDialog):
         layout.addWidget(title)
 
         self.at_time = QRadioButton("From this time (clock-out time):")
-        self.all_day = QRadioButton(
-            "Whole day – did not come to work (0 h)" if kind == "home" else "Sick from the start – did not come (0 h)"
-        )
+        self.all_day = QRadioButton("Sick from the start – did not come (0 h)")
         group = QButtonGroup(self)
         group.addButton(self.at_time)
         group.addButton(self.all_day)
@@ -69,10 +67,11 @@ class LeaveDialog(QDialog):
         row.addStretch()
         layout.addLayout(row)
         layout.addWidget(self.all_day)
+        self.all_day.setVisible(kind != "home")   # Naar Huis zawsze z godziną: wiemy, o której poszedł do domu
         layout.addWidget(_hint("Hours are counted until this time. If the real clock-out time is different, "
                                "change it later: right-click the card → Change time."))
 
-        (self.all_day if all_day_default else self.at_time).setChecked(True)
+        (self.all_day if all_day_default and kind != "home" else self.at_time).setChecked(True)
         self.at_time.toggled.connect(self.time_edit.setEnabled)
         self.time_edit.setEnabled(self.at_time.isChecked())
 

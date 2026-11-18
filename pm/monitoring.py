@@ -36,6 +36,9 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QToolButton,
     QSizePolicy,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
@@ -70,7 +73,7 @@ HELP_TEXT = """
 <i>Zones / clients…</i> and tick all of them. A card with <b>(+2)</b> works in 2 more zones.<br>
 <b>Remove from a zone:</b> right-click → <i>Remove from …</i>.</p>
 <p><b>Naar Huis / Ziek:</b> drop the card there (or right-click). Enter the <b>clock-out time</b>, or
-choose <i>whole day</i> if the person did not come. Hours count until that time.<br>
+for Ziek choose <i>sick from the start</i> if the person did not come. Hours count until that time.<br>
 Wrong time? Right-click the card → <i>Change time…</i>. Mistake? → <i>Back to work</i>.<br>
 <b>Whole shift ends early:</b> <i>Send a group home…</i> under Naar Huis.</p>
 <p><b>⏮ From start of shift:</b> for changes the helpdesk hears about late (e.g. someone was on
@@ -118,13 +121,54 @@ def employee_tooltip(emp):
     )
 
 
-def card_text(emp, show_department=False, show_leave=False):
-    """„095 – Bruno Carvalho Azevedo" (+ ile jeszcze stref, godzina wyjścia przy Ziek / Naar Huis).
-    Za długi tekst lista skraca „…" na końcu; pełne dane są w podpowiedzi."""
+def leave_time(emp):
+    """Godzina na karcie w Ziek / Naar Huis. Ziek od początku zmiany – bez godziny.
+    Naar Huis zawsze z godziną (starszy wpis „cały dzień" – godzina startu z planu)."""
+    if emp.active_since:
+        return emp.active_since
+    if emp.status == "home":
+        hours = emp.planned_hours or emp.work_hours or ""
+        start = hours.split("-", 1)[0].strip() if isinstance(hours, str) and "-" in hours else ""
+        return start if len(start) == 5 and start[2] == ":" else ""
+    return ""
+
+
+LEAVE_TIME_ROLE = Qt.UserRole + 3
+
+
+class LeaveCardDelegate(QStyledItemDelegate):
+    """Karta w Ziek / Naar Huis: godzina zawsze widoczna po prawej, za długie nazwisko skracane „…"."""
+
+    def paint(self, painter, option, index):
+        time = index.data(LEAVE_TIME_ROLE)
+        if not time:
+            super().paint(painter, option, index)
+            return
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""
+        widget = opt.widget
+        style = widget.style() if widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, widget)
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, widget).adjusted(2, 0, -4, 0)
+        metrics = opt.fontMetrics
+        time_width = metrics.horizontalAdvance(time) + 10
+        name_rect = rect.adjusted(0, 0, -time_width, 0)
+        brush = index.data(Qt.ForegroundRole)
+        painter.save()
+        painter.setFont(opt.font)
+        painter.setPen(brush.color() if isinstance(brush, QBrush) else opt.palette.text().color())
+        painter.drawText(name_rect, Qt.AlignVCenter | Qt.AlignLeft,
+                         metrics.elidedText(text, Qt.ElideRight, name_rect.width()))
+        painter.drawText(rect, Qt.AlignVCenter | Qt.AlignRight, time)
+        painter.restore()
+
+
+def card_text(emp, show_department=False):
+    """„095 – Bruno Carvalho Azevedo" (+ ile jeszcze stref). Za długi tekst lista skraca „…" na końcu;
+    pełne dane są w podpowiedzi. Godzinę w Ziek / Naar Huis rysuje LeaveCardDelegate."""
     name = f"{emp.firstname} {emp.lastname}".strip()
     text = f"{emp.login} – {name}" if emp.login else name
-    if show_leave:
-        text += f"   ·  {emp.active_since or 'all day'}"
     if show_department:
         text += f"   ·  {SUB_POSITION_TITLES.get(emp.active_department, emp.active_department)}"
     elif emp.active_department in SUB_POSITIONS and len(emp.positions) > 1:
@@ -497,6 +541,8 @@ class DropZone(QFrame):
         layout.addWidget(self.title_label)
 
         self.list = EmployeeList(accepts_drops)
+        if show_leave:
+            self.list.setItemDelegate(LeaveCardDelegate(self.list))
         self.list.zone_position = position
         self.list.dropped.connect(
             lambda ids, source, add: self.move_requested.emit(ids, self.department, self.position, source, add)
@@ -659,7 +705,9 @@ class DropZone(QFrame):
         else:
             key = lambda e: (e.firstname.casefold(), e.lastname.casefold())  # noqa: E731
         for emp in sorted(employees, key=key):
-            item = QListWidgetItem(card_text(emp, show_department, self.show_leave))
+            item = QListWidgetItem(card_text(emp, show_department))
+            if self.show_leave:
+                item.setData(LEAVE_TIME_ROLE, leave_time(emp))
             item.setSizeHint(QSize(10, CARD_HEIGHT))
             item.setData(Qt.UserRole, emp.employee_id)
             item.setData(Qt.UserRole + 1, emp.status)
