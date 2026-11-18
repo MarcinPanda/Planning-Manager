@@ -14,9 +14,9 @@ import json
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import (
-    QEvent, QMimeData, QSettings, QSize, Qt, QTimer, Signal,
+    QEvent, QMimeData, QPointF, QSettings, QSize, Qt, QTimer, Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QDrag
+from PySide6.QtGui import QBrush, QColor, QDrag, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -316,6 +316,46 @@ class EmployeeList(QListWidget):
             self.dropped.emit(ids, from_position, add)
 
 
+class CloseGlyphButton(QToolButton):
+    """Krzyżyk do usuwania klocka, rysowany kreskami: spokojny w kolorze tekstu pomocniczego,
+    na czerwono dopiero po najechaniu (jak przyciski zamykania w edytorach)."""
+
+    SIZE = 18
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("removeBlockButton")
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setStyleSheet("QToolButton { background: transparent; border: none; }")
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        hovered = self.underMouse()
+        if hovered:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(229, 83, 75, 60 if not self.isDown() else 95))
+            painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 4, 4)
+        color = QColor("#e5534b") if hovered else QColor(theme.color("muted"))
+        pen = QPen(color, 1.6)
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        m = 5.5
+        r = self.rect().adjusted(0, 0, -1, -1)
+        painter.drawLine(QPointF(r.left() + m, r.top() + m), QPointF(r.right() - m + 1, r.bottom() - m + 1))
+        painter.drawLine(QPointF(r.right() - m + 1, r.top() + m), QPointF(r.left() + m, r.bottom() - m + 1))
+
+    def enterEvent(self, event):
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update()
+        super().leaveEvent(event)
+
+
 class DropZone(QFrame):
     """Jedna strefa tablicy: dział albo strefa / klient wewnątrz działu, z kartami osób."""
 
@@ -366,16 +406,8 @@ class DropZone(QFrame):
         self._fit_height(0)
 
         # czerwony krzyżyk w prawym górnym rogu – widoczny tylko w trybie edycji kolumny
-        self.remove_button = QToolButton(self)
-        self.remove_button.setObjectName("removeBlockButton")
-        self.remove_button.setText("✕")
-        self.remove_button.setFixedSize(18, 18)
-        self.remove_button.setCursor(Qt.PointingHandCursor)
+        self.remove_button = CloseGlyphButton(self)
         self.remove_button.setToolTip("Remove this block")
-        self.remove_button.setStyleSheet(
-            "QToolButton { background-color: #d93b3b; color: #ffffff; border: none; border-radius: 9px;"
-            " font-size: 8pt; font-weight: 700; padding: 0; }"
-            "QToolButton:hover { background-color: #b52a2a; }")
         self.remove_button.clicked.connect(self.remove_clicked)
         self.remove_button.hide()
         self.editing = False
