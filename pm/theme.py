@@ -111,6 +111,9 @@ QPushButton:checked, QToolButton:checked {{
 QPushButton:disabled, QToolButton:disabled {{ color: {p['muted']}; border-color: {p['border']}; }}
 QPushButton:default {{ border-color: {p['accent']}; }}
 QToolButton::menu-indicator {{ image: none; width: 0; }}
+QToolButton#addBlockButton {{ color: {p['accent']}; background: transparent; border: 1px dashed {p['accent']};
+    border-radius: 6px; padding: 1px 8px; font-weight: 700; }}
+QToolButton#addBlockButton:hover {{ background-color: {p['accent']}; color: {p['accent_text']}; border-style: solid; }}
 QToolButton#toolbarButton {{ background: transparent; border: 1px solid transparent; padding: 6px 10px; }}
 QToolButton#toolbarButton:hover {{ background-color: {p['hover']}; border-color: {p['border']}; }}
 QToolButton#toolbarButton:checked {{ background-color: {p['accent']}; color: {p['accent_text']}; }}

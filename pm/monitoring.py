@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QGraphicsOpacityEffect,
+    QInputDialog,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -31,13 +32,18 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QToolButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
 from .config import (
+    EXTRA_DEPARTMENTS,
+    EXTRA_INBOUND,
     FROM_START_WINDOW_MIN,
+    POSITION_RENAMES,
+    PROTECTED_ZONES,
     HALLS,
     INBOUND_PREFIX,
     ROW_COLOR_HOME,
@@ -47,6 +53,7 @@ from .config import (
     SUB_POSITIONS,
     TEAM_LIST,
     hall_of,
+    is_inbound,
     zones_snapshot,
 )
 from . import theme
@@ -69,7 +76,8 @@ another department since the start). While it is ON (orange bar), a drop changes
 from the start of the shift. It switches off by itself 30 minutes after the shift starts.</p>
 <p><b>Move a whole block:</b> grab it by its <b>title</b> and drop it onto another block in the same column
 (the blocks you can use lift up). The order is kept on this computer only; ⋯ → <i>Reset board layout</i> = back
-to the default. New / renamed zones and halls: ⋯ → <i>Edit zones…</i> (for everyone).</p>
+to the default. <br><b>New block:</b> the <b>+</b> next to a column title. <b>Rename / other hall / remove:</b> right-click
+the block title. These changes are for everyone.</p>
 <p><b>Ctrl+Z</b> undoes the last change. Click a hall header to fold it.</p>
 """
 
@@ -136,6 +144,11 @@ def section_header(text, color, icon_name=None):
     layout.addWidget(label, 1)
     frame.label = label
     return frame
+
+
+def board_signature():
+    """Co decyduje o wyglądzie tablicy: strefy i lista działów (zmiana także z innego komputera)."""
+    return zones_snapshot(), tuple(TEAM_LIST), frozenset(EXTRA_INBOUND)
 
 
 class LayoutStore:
@@ -309,6 +322,7 @@ class DropZone(QFrame):
     drag_state = Signal(bool)
     zone_moved = Signal(str, str, str)                  # kolumna, przenoszony klocek, klocek docelowy
     zone_drag = Signal(str, str, bool)                  # kolumna, klocek, True = start / False = koniec
+    title_menu = Signal(object)                         # prawy klik na nazwie klocka (pozycja na ekranie)
 
     def __init__(self, title, department, position="", accepts_drops=True, fit=True, min_rows=1,
                  show_leave=False, parent=None):
@@ -357,7 +371,10 @@ class DropZone(QFrame):
         self.column_key = column_key
         self.setAcceptDrops(True)       # karty osób odbiera lista; klocki – ramka (zdarzenie przechodzi wyżej)
         self.title_label.setCursor(Qt.OpenHandCursor)
-        self.title_label.setToolTip("Drag the title to move this block")
+        self.title_label.setToolTip("Drag the title to move this block · right-click: rename / remove")
+        self.title_label.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.title_label.customContextMenuRequested.connect(
+            lambda pos: self.title_menu.emit(self.title_label.mapToGlobal(pos)))
 
     def eventFilter(self, obj, event):
         if obj is self.title_label and self.column_key:
@@ -479,6 +496,8 @@ class DropZone(QFrame):
 class Column(QFrame):
     """Kolumna tablicy (REACH / PICKING / INBOUND / OTHER): nagłówek + siatka stref."""
 
+    add_requested = Signal(str)   # „+" przy nagłówku: klucz kolumny
+
     def __init__(self, title, zones, grid_columns, icon_name=None, key="", parent=None):
         super().__init__(parent)
         self.title = title
@@ -498,7 +517,17 @@ class Column(QFrame):
         header_row.addWidget(self.icon_label)
         self.header = QLabel(title)
         self.header.setObjectName("columnHeader")
-        header_row.addWidget(self.header, 1)
+        header_row.addWidget(self.header)
+        if key:
+            self.add_button = QToolButton()
+            self.add_button.setObjectName("addBlockButton")
+            self.add_button.setText("+ Add")
+            self.add_button.setCursor(Qt.PointingHandCursor)
+            self.add_button.setToolTip(f"Add a new block to {title}")
+            self.add_button.clicked.connect(lambda: self.add_requested.emit(self.key))
+            header_row.addSpacing(6)
+            header_row.addWidget(self.add_button)
+        header_row.addStretch(1)
         layout.addLayout(header_row)
         self.refresh_theme()
 
@@ -577,6 +606,7 @@ class MonitoringView(QWidget):
     leave_requested = Signal(list, str)          # ids, 'home' / 'sick' (upuszczenie albo menu)
     action_requested = Signal(str, list)         # 'time' / 'back' / 'zones', ids
     group_home_requested = Signal()
+    board_edit_requested = Signal(str, dict)     # dodanie / zmiana / usunięcie klocka (zapis w bazie)
 
     def __init__(self, parent=None, layout_store=None):
         super().__init__(parent)
@@ -715,10 +745,11 @@ class MonitoringView(QWidget):
             self.board_zones.append(zone)
             zone.zone_moved.connect(self.move_zone)
             zone.zone_drag.connect(self._show_drop_targets)
+            zone.title_menu.connect(lambda pos, z=zone: self._block_menu(z, pos))
         return zones
 
     def _build_board(self):
-        """(Prze)budowa hal i klocków: po zmianie stref (Edit zones…) albo ułożenia (przeniesiony klocek)."""
+        """(Prze)budowa hal i klocków: po zmianie stref (+ Add / prawy klik) albo ułożenia (przeniesiony klocek)."""
         folded = {name: not hall.header.isChecked() for name, hall in self.halls.items()}
         for zone in self.board_zones:
             if zone in self.all_zones:
@@ -749,7 +780,7 @@ class MonitoringView(QWidget):
                                            "hall_north" if hall == "North" else "hall_south")
             body_layout.addWidget(self.halls[hall])
 
-        inbound = [d for d in TEAM_LIST if d.startswith(INBOUND_PREFIX)]
+        inbound = [d for d in TEAM_LIST if is_inbound(d)]
         other = [d for d in TEAM_LIST
                  if d not in SUB_POSITIONS and d not in SIDE_DEPARTMENTS and d not in inbound]
         shared = [
@@ -767,7 +798,9 @@ class MonitoringView(QWidget):
 
         self.board_layout.insertWidget(0, body)
         self.board_body = body
-        self._zones_signature = zones_snapshot()
+        for column in self.columns:
+            column.add_requested.connect(self._add_block)
+        self._zones_signature = board_signature()
         for column in self.columns:
             column.refresh_theme()
 
@@ -786,12 +819,71 @@ class MonitoringView(QWidget):
 
     def update_zones(self):
         """Wywoływane po każdym odświeżeniu: strefy zmienione (także na innym komputerze) -> nowa tablica."""
-        if zones_snapshot() != self._zones_signature and not self.dragging:
+        if board_signature() != self._zones_signature and not self.dragging:
             self._rebuild()
 
     def _rebuild(self):
         self._build_board()
         self.set_employees(self.employees, force=True)
+
+    # ------------------------------------------- dodawanie / zmiana / usuwanie klocków
+    def _add_block(self, key):
+        hall, kind = key.split(":", 1)
+        if kind in SUB_POSITIONS:
+            title = f"{SUB_POSITION_TITLES[kind]} – {hall}"
+            name, ok = QInputDialog.getText(self, "New block", f"New zone / client in {title}:")
+            name = name.strip()
+            if not ok or not name:
+                return
+            if name in POSITION_RENAMES:
+                QMessageBox.warning(self, "New block", f"'{name}' is an old name the program replaces automatically "
+                                                       f"('{POSITION_RENAMES[name]}'). Choose another name.")
+                return
+            self.board_edit_requested.emit("add_zone", {"department": kind, "name": name, "hall": hall})
+            return
+        from .config import hours_columns
+        from .monitoring_dialogs import NewDepartmentDialog
+        dialog = NewDepartmentDialog(kind.upper(), hours_columns(), self)
+        if dialog.exec() != NewDepartmentDialog.Accepted:
+            return
+        name, column = dialog.values()
+        if name:
+            self.board_edit_requested.emit("add_department", {"name": name, "group": kind, "hours_column": column})
+
+    def _block_menu(self, zone, global_pos):
+        menu = QMenu(self)
+        if zone.position:
+            dept, name = zone.department, zone.position
+            locked = name in PROTECTED_ZONES
+            rename = menu.addAction("Rename…", lambda: self._rename_block(dept, name))
+            other = "South" if hall_of(dept, name) == "North" else "North"
+            menu.addAction(f"Move to {other} hall",
+                           lambda: self.board_edit_requested.emit("zone_hall", {"department": dept, "name": name,
+                                                                                "hall": other}))
+            menu.addSeparator()
+            remove = menu.addAction("Remove block…", lambda: self._remove_block("remove_zone", dept, name))
+            if locked:
+                for action in (rename, remove):
+                    action.setEnabled(False)
+                menu.addAction("(used by the consolidation list / Reflex hours)").setEnabled(False)
+        else:
+            dept = zone.department
+            remove = menu.addAction("Remove block…", lambda: self._remove_block("remove_department", dept, dept))
+            if dept not in EXTRA_DEPARTMENTS:
+                remove.setEnabled(False)
+                menu.addAction("(standard department – cannot be removed)").setEnabled(False)
+        menu.exec(global_pos)
+
+    def _rename_block(self, dept, name):
+        new, ok = QInputDialog.getText(self, "Rename block", "New name:", text=name)
+        new = new.strip()
+        if ok and new and new != name:
+            self.board_edit_requested.emit("rename_zone", {"department": dept, "old": name, "new": new})
+
+    def _remove_block(self, action, dept, name):
+        answer = QMessageBox.question(self, "Remove block", f"Remove '{name}' from the board for everyone?")
+        if answer == QMessageBox.Yes:
+            self.board_edit_requested.emit(action, {"department": dept, "name": name})
 
     def _show_drop_targets(self, key, title, started):
         """Przenoszony klocek przygasa, a klocki tej samej kolumny (tam można go upuścić) się unoszą."""
@@ -942,7 +1034,7 @@ class MonitoringView(QWidget):
             "On shift": len(working),
             "Reach": sum(1 for e in working if e.active_department == "Reachtruck"),
             "Picking": sum(1 for e in working if e.active_department == "Orderpicker"),
-            "Inbound": sum(1 for e in working if e.active_department.startswith(INBOUND_PREFIX)),
+            "Inbound": sum(1 for e in working if is_inbound(e.active_department)),
             "Unassigned": sum(1 for e in unassigned if e.status not in ("sick", "home")),
             "Ziek": sum(1 for e in employees if e.status == "sick"),
             "Naar Huis": sum(1 for e in employees if e.status == "home"),

@@ -83,11 +83,12 @@ co aplikacja** (tak jest domyślnie, bez żadnego ustawiania). Inne miejsce na b
 
 ## Etap 4 – tablica do ułożenia po swojemu ✅ (punkty 1–2 zrobione 18.11 – do sprawdzenia w pracy)
 
-Zrobione: tabela `zones` w bazie, ⋯ → *Edit zones…*, klocki przenoszone za nazwę zawsze (bez trybu, ustalone 18.11)
+Zrobione: tabele `zones` i `extra_departments` w bazie; klocki dodaje się (+ Add przy kolumnie), zmienia i usuwa
+(prawy klik na nazwie) prosto na tablicy – także nowe działy w INBOUND / OTHER; klocki przenoszone za nazwę zawsze (bez trybu, ustalone 18.11)
 + niebieska ramka miejsc docelowych, ⋯ → *Reset board layout*. Strefa po zmianie
 nazwy na komputerze z własnym ułożeniem trafia na koniec kolumny (wystarczy ją przestawić). Punkt 3 – do decyzji.
 
-1. **Edycja stref i klientów** (⚙ → „Edit zones…", schowane):
+1. **Edycja stref i klientów** (pierwotny pomysł: ⚙ → „Edit zones…"; 18.11 zmienione na edycję prosto na tablicy):
    - dodaj, usuń, zmień nazwę, wybierz halę (North / South) i dział (Reach / Picking);
    - kolejność przeciąganiem na liście;
    - strefa z ludźmi nie da się usunąć (najpierw trzeba ich przenieść);

@@ -144,7 +144,7 @@ def hall_of(department, position):
     return "South" if position in SOUTH_POSITIONS.get(department, ()) else "North"
 
 
-# Strefy są zapisane w bazie (tabela zones, wspólne dla wszystkich komputerów, ⚙ → Edit zones…).
+# Strefy są zapisane w bazie (tabela zones, wspólne dla wszystkich komputerów, edycja na tablicy: + Add / prawy klik).
 # Powyższe listy to ustawienie startowe dla nowej bazy; po wczytaniu bazy apply_zones() podmienia ich zawartość.
 DEFAULT_ZONES = {dept: [(name, hall_of(dept, name)) for name in names] for dept, names in SUB_POSITIONS.items()}
 # Strefy, od których zależy logika programu (lista konsolidacji, godziny Reflex) – bez zmiany nazwy i usuwania.
@@ -249,3 +249,31 @@ HOURS_COLUMN_MAP = {
 HOURS_NOTE_DEPARTMENTS = {"Buffer": "Buffer", "Reflex": "reflex"}
 HOURS_DAY_SHEETS = ["Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag", "Zaterdag", "Zondag"]
 HOURS_MAX_PER_PERSON = 16.0   # więcej godzin jednej osoby w jednym dniu = na pewno błąd
+
+
+# Działy dodane na tablicy („+" przy INBOUND / OTHER) – zapisane w bazie (tabela extra_departments).
+BUILTIN_TEAMS = tuple(TEAM_LIST)
+BUILTIN_HOURS_COLUMN_MAP = dict(HOURS_COLUMN_MAP)
+EXTRA_INBOUND = set()     # dodane działy w kolumnie INBOUND
+EXTRA_DEPARTMENTS = set()
+
+
+def is_inbound(department):
+    return department.startswith(INBOUND_PREFIX) or department in EXTRA_INBOUND
+
+
+def hours_columns():
+    """Znane kolumny pliku godzin (do wyboru przy dodawaniu działu)."""
+    return sorted(set(BUILTIN_HOURS_COLUMN_MAP.values()), key=str.lower)
+
+
+def apply_extra_departments(rows):
+    """rows = [(nazwa, 'Inbound' / 'Other', kolumna w pliku godzin)]. Zmienia listy na miejscu."""
+    TEAM_LIST[:] = sorted(set(BUILTIN_TEAMS) | {name for name, _, _ in rows}, key=lambda x: x.lower())
+    EXTRA_INBOUND.clear()
+    EXTRA_INBOUND.update(name for name, group, _ in rows if group == "Inbound")
+    EXTRA_DEPARTMENTS.clear()
+    EXTRA_DEPARTMENTS.update(name for name, _, _ in rows)
+    HOURS_COLUMN_MAP.clear()
+    HOURS_COLUMN_MAP.update(BUILTIN_HOURS_COLUMN_MAP)
+    HOURS_COLUMN_MAP.update({name: column for name, _, column in rows if column})

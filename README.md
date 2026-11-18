@@ -100,14 +100,16 @@ Monitoring to „oczy steeringu": kto gdzie teraz jest i co robi.
 
 - U góry liczniki: na zmianie, Reach, Picking, Inbound, Other, Unassigned, Ziek, Naar Huis.
 - Hale **North** i **South** (nagłówek zwija halę): kolumny REACH i PICKING, w nich strefy / klienci.
-- **⋯ → Edit zones…**: dodawanie, zmiana nazwy, usuwanie, hala North / South i kolejność stref Reach i Picking.
-  Zapisane w bazie, więc **wspólne dla wszystkich komputerów** (inne komputery widzą zmianę po kilku sekundach).
-  Strefa z ludźmi na tej zmianie nie da się usunąć; po zmianie nazwy ludzie w niej zostają. Kantel/Consolidatie i
-  Reflex można przesuwać, ale nie zmieniać nazwy ani usuwać. Tego Ctrl+Z nie cofa.
+- **Klocki edytuje się na tablicy** (dla wszystkich komputerów, zapis w bazie; Ctrl+Z tego nie cofa):
+  - **+ Add** przy nazwie kolumny = nowy klocek w tej kolumnie i hali. W REACH / PICKING to strefa / klient,
+    w INBOUND / OTHER – nowy dział (pyta też, do której kolumny pliku godzin idą jego godziny);
+  - **prawy klik na nazwie klocka** = *Rename…*, *Move to North / South hall*, *Remove block…*;
+  - klocka z ludźmi na tej zmianie nie da się usunąć; po zmianie nazwy ludzie zostają w klocku;
+  - Kantel/Consolidatie i Reflex – bez zmiany nazwy i usuwania; standardowych działów nie da się usunąć.
 - **Przenoszenie klocków**: klocek łapie się za **nazwę** (nagłówek) i upuszcza na inny klocek tej samej kolumny
   (Reach, Picking, Inbound, Other) – bez włączania żadnego trybu; za kartę osoby nadal przenosi się osobę. W trakcie
   przenoszenia klocki, na które można upuścić, mają dookoła niebieską ramkę, a przenoszony jest przygaszony.
-  Ułożenie jest zapamiętane **tylko na tym komputerze**; ⋯ → *Reset board layout* = kolejność z Edit zones.
+  Ułożenie jest zapamiętane **tylko na tym komputerze**; ⋯ → *Reset board layout* = kolejność domyślna.
 - **Both halls**: INBOUND (Inbound 1–5) i OTHER (pozostałe działy).
 - Panel po prawej: **Unassigned** (Reach bez strefy, Picking bez klienta), Ziek, Naar Huis.
 - Pracownik to karta „login – Imię Nazwisko"; `[+2]` = pracuje jeszcze w 2 innych strefach.

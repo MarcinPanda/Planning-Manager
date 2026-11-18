@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -225,3 +226,33 @@ class ZonePickerDialog(QDialog):
 
     def positions(self):
         return [b.text() for b in self.boxes if b.isChecked()] + self.unknown
+
+
+
+class NewDepartmentDialog(QDialog):
+    """„+" przy INBOUND / OTHER: nowy dział – nazwa i kolumna w pliku godzin (Uren_Lijst)."""
+
+    ASK_LATER = "– choose when writing hours –"
+
+    def __init__(self, column_title, hours_columns, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"New block in {column_title}")
+        layout = QGridLayout(self)
+        layout.addWidget(QLabel("Name:"), 0, 0)
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("e.g. Inbound 6")
+        layout.addWidget(self.name_edit, 0, 1)
+        layout.addWidget(QLabel("Hours go to column\n(hours file):"), 1, 0)
+        self.column_combo = QComboBox()
+        self.column_combo.addItem(self.ASK_LATER, "")
+        for column in hours_columns:
+            self.column_combo.addItem(column, column)
+        layout.addWidget(self.column_combo, 1, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons, 2, 0, 1, 2)
+        self.setMinimumWidth(420)
+
+    def values(self):
+        return self.name_edit.text().strip(), self.column_combo.currentData() or ""

@@ -187,23 +187,50 @@ def test_board_follows_zone_changes(temp_db, app):
     assert view.position_zones[("Reachtruck", "Noord-Oost")].ids() == [emp_id]
 
 
-def test_dialog_reports_renames_by_original_name(temp_db, app):
-    from pm.zones_dialog import ZonesDialog
+def test_board_operations_on_zones(temp_db):
+    assert db.add_zone("Reachtruck", "Mars NL", "South") == []
+    reach = _reach()
+    assert reach[[n for n, _ in reach].index("Reflex") + 1] == ("Mars NL", "South")   # na końcu hali South
+    assert config.hall_of("Reachtruck", "Mars NL") == "South"
 
-    dialog = ZonesDialog(db.load_zones())
-    assert dialog.dept_combo.currentData() == "Reachtruck"
-    item = dialog.list.item(0)
-    assert item.data(Qt.UserRole + 1) == "Noord"
-    item.setData(Qt.UserRole + 1, "B")
-    item.setData(Qt.UserRole + 1, "C")                 # dwa razy zmieniona nazwa -> {Noord: C}
-    dialog.list.setCurrentRow(1)
-    dialog.toggle_hall()                               # Replenish -> South
-    entries, renames = dialog.changes()["Reachtruck"]
-    assert renames == {"Noord": "C"}
-    assert entries[:2] == [("C", "North"), ("Replenish", "South")]
-    assert db.save_zones("Reachtruck", entries, renames) == []
+    emp_id = _reacher("Mars NL")
+    assert db.rename_zone("Reachtruck", "Mars NL", "Mars Nederland") == []
+    assert _emp(emp_id).positions == ["Mars Nederland"]
+    assert db.set_zone_hall("Reachtruck", "Mars Nederland", "North") == []
+    assert config.hall_of("Reachtruck", "Mars Nederland") == "North"
+    assert db.remove_zone("Reachtruck", "Mars Nederland")                 # ktoś w niej jest
+    db.set_positions_in_db(emp_id, ["Noord"])
+    assert db.remove_zone("Reachtruck", "Mars Nederland") == []
+    assert "Mars Nederland" not in config.SUB_POSITIONS["Reachtruck"]
 
-    kantel = next(i for i in range(dialog.list.count())
-                  if dialog.list.item(i).data(Qt.UserRole) == "Kantel/Consolidatie")
-    dialog.list.setCurrentRow(kantel)
-    assert not dialog.rename_button.isEnabled() and not dialog.remove_button.isEnabled()
+
+def test_added_department_on_board_and_in_hours(temp_db):
+    assert db.add_department("Inbound 6", "Inbound", "Lossen - inslag controle") == []
+    assert db.add_department("Sorteren", "Other", "") == []
+    assert db.add_department("laden", "Other", "") and db.add_department("  ", "Other", "")
+    assert "Inbound 6" in config.TEAM_LIST and config.is_inbound("Inbound 6")
+    assert config.HOURS_COLUMN_MAP["Inbound 6"] == "Lossen - inslag controle"
+    assert "Sorteren" not in config.HOURS_COLUMN_MAP                      # kolumna wybierana przy zapisie
+
+    emp_id = make_employee(department="Sorteren")
+    assert db.load_employees_from_db()[0].active_department == "Sorteren"
+    assert db.remove_department("Laden")                                  # wbudowanego nie
+    assert db.remove_department("Sorteren")                               # ktoś w nim jest
+    assert db.move_employees_in_db([emp_id], "Laden", "", "07:00", from_start=True) == []
+    assert db.remove_department("Sorteren") == []
+    assert "Sorteren" not in config.TEAM_LIST
+
+
+def test_board_shows_added_blocks(temp_db, app):
+    view = MonitoringView(layout_store=MemoryLayoutStore())
+    columns = {c.key: c for c in view.columns}
+    assert all(hasattr(c, "add_button") for c in columns.values())       # „+" przy każdej kolumnie
+    asked = []
+    view.board_edit_requested.connect(lambda action, params: asked.append((action, params)))
+
+    db.add_zone("Orderpicker", "Lidl", "North")
+    db.add_department("Inbound 6", "Inbound", "")
+    view.update_zones()
+    assert "Lidl" in view.zone_order("North:Orderpicker")
+    assert "Inbound 6" in view.zone_order("Both:Inbound")
+    assert "Inbound 6" not in view.zone_order("Both:Other")

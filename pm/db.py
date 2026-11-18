@@ -87,7 +87,7 @@ def _create_change_tracking(cursor):
     że trzeba odświeżyć widok."""
     cursor.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)")
     cursor.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('changes', 0)")
-    for table in ("employees", "departments", "consolidation", "logins", "shifts", "zones"):
+    for table in ("employees", "departments", "consolidation", "logins", "shifts", "zones", "extra_departments"):
         for event in ("INSERT", "UPDATE", "DELETE"):
             cursor.execute(f"""
                 CREATE TRIGGER IF NOT EXISTS trg_{table}_{event.lower()} AFTER {event} ON {table}
@@ -324,6 +324,13 @@ def _create_zones(cursor):
             UNIQUE (department, name)
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS extra_departments (
+            name TEXT PRIMARY KEY,
+            grp TEXT NOT NULL DEFAULT 'Other',
+            hours_column TEXT NOT NULL DEFAULT ''
+        )
+    """)
     if cursor.execute("SELECT 1 FROM zones LIMIT 1").fetchone():
         return
     for dept, entries in config.DEFAULT_ZONES.items():
@@ -332,12 +339,15 @@ def _create_zones(cursor):
 
 
 def load_zones():
-    """Strefy z bazy -> config (SUB_POSITIONS / SOUTH_POSITIONS). Zwraca {dział: [(nazwa, hala)]}."""
+    """Strefy i dodane działy z bazy -> config (SUB_POSITIONS / SOUTH_POSITIONS / TEAM_LIST).
+    Zwraca {dział: [(nazwa, hala)]}."""
     conn = get_connection()
     try:
         rows = conn.execute("SELECT department, name, hall FROM zones ORDER BY department, sort, id").fetchall()
+        extra = conn.execute("SELECT name, grp, hours_column FROM extra_departments ORDER BY name").fetchall()
     finally:
         conn.close()
+    config.apply_extra_departments(extra)
     zones = {dept: [] for dept in config.DEFAULT_ZONES}
     for dept, name, hall in rows:
         zones.setdefault(dept, []).append((name, hall))
@@ -423,6 +433,85 @@ def save_zones(department, entries, renames=None):
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+    load_zones()
+    return []
+
+
+def _zone_entries(department):
+    return list(config.zones_snapshot().get(department, []))
+
+
+def add_zone(department, name, hall):
+    """Nowy klocek (strefa / klient) na końcu danej hali – „+" przy kolumnie na tablicy."""
+    load_zones()
+    entries = _zone_entries(department)
+    last = max((i for i, (_, h) in enumerate(entries) if h == hall), default=len(entries) - 1)
+    entries.insert(last + 1, (name.strip(), hall))
+    return save_zones(department, entries)
+
+
+def rename_zone(department, old, new):
+    load_zones()
+    entries = [(new.strip() if name == old else name, hall) for name, hall in _zone_entries(department)]
+    return save_zones(department, entries, {old: new.strip()})
+
+
+def set_zone_hall(department, name, hall):
+    load_zones()
+    return save_zones(department, [(n, hall if n == name else h) for n, h in _zone_entries(department)])
+
+
+def remove_zone(department, name):
+    load_zones()
+    return save_zones(department, [(n, h) for n, h in _zone_entries(department) if n != name])
+
+
+def add_department(name, group, hours_column):
+    """Nowy dział na tablicy (kolumna INBOUND albo OTHER) z kolumną w pliku godzin. Zwraca listę błędów."""
+    name = name.strip()
+    load_zones()
+    if not name:
+        return ["A department needs a name."]
+    if name.casefold() in {t.casefold() for t in config.TEAM_LIST}:
+        return [f"'{name}' already exists."]
+    if group not in ("Inbound", "Other"):
+        return ["Column must be INBOUND or OTHER."]
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO extra_departments (name, grp, hours_column) VALUES (?, ?, ?)",
+                       (name, group, hours_column or ""))
+        _record(cursor, "Departments", f"added {name} ({group}" + (f", hours -> {hours_column})" if hours_column
+                                                                    else ")"))
+        conn.commit()
+    finally:
+        conn.close()
+    load_zones()
+    return []
+
+
+def remove_department(name):
+    """Usuwa dział dodany na tablicy (wbudowanych nie). Nie, gdy ktoś jest w nim na wyświetlanej zmianie."""
+    load_zones()
+    if name not in config.EXTRA_DEPARTMENTS:
+        return [f"'{name}' is a standard department and cannot be removed."]
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        shift_id = _resolve_shift(cursor)
+        who = []
+        if shift_id is not None:
+            for emp_id, last, first in cursor.execute(
+                    "SELECT id, lastname, firstname FROM employees WHERE shift_id = ?", (shift_id,)).fetchall():
+                if _last_department(cursor, emp_id) == name:
+                    who.append(f"{first} {last}")
+        if who:
+            return [f"'{name}' still has people: {', '.join(sorted(who)[:5])} – move them first."]
+        cursor.execute("DELETE FROM extra_departments WHERE name = ?", (name,))
+        _record(cursor, "Departments", f"removed {name}")
+        conn.commit()
     finally:
         conn.close()
     load_zones()

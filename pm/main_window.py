@@ -63,7 +63,6 @@ from .hours_dialog import HoursDialog, remember_columns, remembered_columns
 from .monitoring import MonitoringView
 from .monitoring_dialogs import GroupHomeDialog, LeaveDialog, TimeDialog, ZonePickerDialog
 from .table_model import EmployeeTableModel
-from .zones_dialog import ZonesDialog
 from .widgets import DatabaseLoadWorker, DatabaseTaskWorker, InfoItemDelegate, MainThreadRelay, ToggleButton
 
 # Widoki w menu po lewej: (nazwa, opis). Indeks = pozycja w QStackedWidget.
@@ -138,6 +137,7 @@ class MainWindow(QMainWindow):
         self.monitoring_view.leave_requested.connect(self.leave_work)
         self.monitoring_view.action_requested.connect(self.monitoring_action)
         self.monitoring_view.group_home_requested.connect(self.group_home)
+        self.monitoring_view.board_edit_requested.connect(self.board_edit)
 
         self.consolidation_view = ConsolidationView()
         self.consolidation_view.update_requested.connect(self.update_consolidation)
@@ -594,10 +594,9 @@ class MainWindow(QMainWindow):
             ])
         layout.addWidget(self.export_button)
 
-        self.more_button, (self.theme_action, self.zones_action, self.reset_board_action, self.db_action,
+        self.more_button, (self.theme_action, self.reset_board_action, self.db_action,
                            self.clear_action) = self._menu_tool("settings", "", [
                 ("settings", "Switch to light theme", self.toggle_theme),
-                ("edit_zones", "Edit zones…", self.edit_zones),
                 ("move", "Reset board layout (this computer)", self.reset_board_layout),
                 ("database", "Database location…", self.choose_database_folder),
                 None,
@@ -648,40 +647,32 @@ class MainWindow(QMainWindow):
         self.refresh_data()
 
     def reset_board_layout(self):
-        """Kolejność klocków na Monitoringu z powrotem jak w Edit zones (tylko ten komputer)."""
+        """Kolejność klocków na Monitoringu z powrotem domyślna (tylko ten komputer)."""
         answer = QMessageBox.question(
             self, "Reset board layout",
-            "Put all blocks on the Monitoring board back in the default order (from Edit zones…)?\n"
+            "Put all blocks on the Monitoring board back in the default order?\n"
             "This only changes this computer.")
         if answer == QMessageBox.Yes and self.monitoring_view is not None:
             self.monitoring_view.reset_layout()
 
-    def edit_zones(self):
-        """⋯ → Edit zones…: strefy Reach / Picking, wspólne dla wszystkich komputerów."""
-        try:
-            zones = db.load_zones()
-        except Exception as exc:
-            self._db_error(str(exc))
-            return
-        dialog = ZonesDialog(zones, self)
-        if dialog.exec() != QDialog.Accepted:
-            return
-        changes = dialog.changes()
-        if not changes:
-            return
+    BOARD_EDITS = {
+        "add_zone": lambda p: db.add_zone(p["department"], p["name"], p["hall"]),
+        "rename_zone": lambda p: db.rename_zone(p["department"], p["old"], p["new"]),
+        "zone_hall": lambda p: db.set_zone_hall(p["department"], p["name"], p["hall"]),
+        "remove_zone": lambda p: db.remove_zone(p["department"], p["name"]),
+        "add_department": lambda p: db.add_department(p["name"], p["group"], p["hours_column"]),
+        "remove_department": lambda p: db.remove_department(p["name"]),
+    }
 
-        def task():
-            errors = []
-            for dept, (entries, renames) in changes.items():
-                title = config.SUB_POSITION_TITLES.get(dept, dept)
-                errors += [f"{title}: {e}" for e in db.save_zones(dept, entries, renames)]
-            return errors
+    def board_edit(self, action, params):
+        """Klocek dodany / zmieniony / usunięty na tablicy (+ przy kolumnie, prawy klik na nazwie) – dla wszystkich."""
+        edit = self.BOARD_EDITS[action]
 
         def done(errors):
             if errors:
-                QMessageBox.warning(self, "Edit zones", "Not saved:\n\n" + "\n".join(errors))
+                QMessageBox.warning(self, "Board", "Not changed:\n\n" + "\n".join(errors))
 
-        self.run_db_task(task, on_finished=done, refresh_after=True)
+        self.run_db_task(lambda: edit(params), on_finished=done, refresh_after=True)
 
     def choose_database_folder(self):
         """Folder ze wspólną bazą (np. dysk sieciowy) – zapisany w settings.ini obok programu."""
