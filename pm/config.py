@@ -256,6 +256,7 @@ BUILTIN_TEAMS = tuple(TEAM_LIST)
 BUILTIN_HOURS_COLUMN_MAP = dict(HOURS_COLUMN_MAP)
 EXTRA_INBOUND = set()     # dodane działy w kolumnie INBOUND
 EXTRA_DEPARTMENTS = set()
+HIDDEN_DEPARTMENTS = set()  # działy zdjęte z tablicy (czerwony krzyżyk) – ludzie w Unassigned
 
 
 def is_inbound(department):

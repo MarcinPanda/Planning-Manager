@@ -30,6 +30,7 @@ def temp_db(tmp_path, monkeypatch):
     yield tmp_path
     config.apply_zones(config.DEFAULT_ZONES)   # strefy zmienione w teście nie przechodzą do kolejnych
     config.apply_extra_departments([])
+    config.HIDDEN_DEPARTMENTS.clear()
 
 
 def make_employee(lastname="Test", firstname="Anna", department="Buffer",

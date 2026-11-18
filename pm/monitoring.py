@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QInputDialog,
     QGridLayout,
@@ -39,8 +40,8 @@ from PySide6.QtWidgets import (
 )
 
 from .config import (
-    EXTRA_DEPARTMENTS,
     EXTRA_INBOUND,
+    HIDDEN_DEPARTMENTS,
     FROM_START_WINDOW_MIN,
     POSITION_RENAMES,
     PROTECTED_ZONES,
@@ -76,8 +77,9 @@ another department since the start). While it is ON (orange bar), a drop changes
 from the start of the shift. It switches off by itself 30 minutes after the shift starts.</p>
 <p><b>Move a whole block:</b> grab it by its <b>title</b> and drop it onto another block in the same column
 (the blocks you can use lift up). The order is kept on this computer only; ⋯ → <i>Reset board layout</i> = back
-to the default. <br><b>New block:</b> the <b>+</b> next to a column title. <b>Rename / other hall / remove:</b> right-click
-the block title. These changes are for everyone.</p>
+to the default. <br><b>Add / remove blocks:</b> the gear next to a column title – every block gets a red <b>✕</b> (its people go
+to Unassigned) and an empty <b>+</b> block appears at the end. <b>Rename / other hall:</b> right-click the block
+title. These changes are for everyone.</p>
 <p><b>Ctrl+Z</b> undoes the last change. Click a hall header to fold it.</p>
 """
 
@@ -148,7 +150,7 @@ def section_header(text, color, icon_name=None):
 
 def board_signature():
     """Co decyduje o wyglądzie tablicy: strefy i lista działów (zmiana także z innego komputera)."""
-    return zones_snapshot(), tuple(TEAM_LIST), frozenset(EXTRA_INBOUND)
+    return zones_snapshot(), tuple(TEAM_LIST), frozenset(EXTRA_INBOUND), frozenset(HIDDEN_DEPARTMENTS)
 
 
 class LayoutStore:
@@ -323,6 +325,7 @@ class DropZone(QFrame):
     zone_moved = Signal(str, str, str)                  # kolumna, przenoszony klocek, klocek docelowy
     zone_drag = Signal(str, str, bool)                  # kolumna, klocek, True = start / False = koniec
     title_menu = Signal(object)                         # prawy klik na nazwie klocka (pozycja na ekranie)
+    remove_clicked = Signal()                           # czerwony krzyżyk (tryb edycji kolumny)
 
     def __init__(self, title, department, position="", accepts_drops=True, fit=True, min_rows=1,
                  show_leave=False, parent=None):
@@ -362,6 +365,40 @@ class DropZone(QFrame):
         layout.addWidget(self.list)
         self._fit_height(0)
 
+        # czerwony krzyżyk w prawym górnym rogu – widoczny tylko w trybie edycji kolumny
+        self.remove_button = QToolButton(self)
+        self.remove_button.setObjectName("removeBlockButton")
+        self.remove_button.setText("✕")
+        self.remove_button.setFixedSize(18, 18)
+        self.remove_button.setCursor(Qt.PointingHandCursor)
+        self.remove_button.setToolTip("Remove this block")
+        self.remove_button.setStyleSheet(
+            "QToolButton { background-color: #d93b3b; color: #ffffff; border: none; border-radius: 9px;"
+            " font-size: 8pt; font-weight: 700; padding: 0; }"
+            "QToolButton:hover { background-color: #b52a2a; }")
+        self.remove_button.clicked.connect(self.remove_clicked)
+        self.remove_button.hide()
+        self.editing = False
+
+    def set_editing(self, on, removable=True):
+        """Tryb edycji kolumny: niebieska ramka i (gdy wolno usunąć) czerwony krzyżyk."""
+        self.editing = on
+        self.set_lift("target" if on else None)
+        self.remove_button.setVisible(on and removable)
+        side = 20 if on else 0                     # miejsce na krzyżyk – nazwa i liczba osób go nie wchodzą pod niego
+        self.title_label.setContentsMargins(side, 0, side, 0)
+        if not removable:
+            self.title_label.setToolTip("Used by the consolidation list / Reflex hours – cannot be removed")
+        self._place_remove_button()
+
+    def _place_remove_button(self):
+        self.remove_button.move(self.width() - self.remove_button.width() - 3, 3)
+        self.remove_button.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._place_remove_button()
+
     def ids(self):
         return [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())]
 
@@ -371,7 +408,7 @@ class DropZone(QFrame):
         self.column_key = column_key
         self.setAcceptDrops(True)       # karty osób odbiera lista; klocki – ramka (zdarzenie przechodzi wyżej)
         self.title_label.setCursor(Qt.OpenHandCursor)
-        self.title_label.setToolTip("Drag the title to move this block · right-click: rename / remove")
+        self.title_label.setToolTip("Drag the title to move this block · right-click: rename")
         self.title_label.setContextMenuPolicy(Qt.CustomContextMenu)
         self.title_label.customContextMenuRequested.connect(
             lambda pos: self.title_menu.emit(self.title_label.mapToGlobal(pos)))
@@ -493,10 +530,52 @@ class DropZone(QFrame):
         self._fit_height(count)
 
 
+class AddBlockTile(QFrame):
+    """Pusty klocek z plusem na końcu kolumny (tryb edycji): kliknięcie = nowy klocek."""
+
+    clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("addBlockTile")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Add a new block here")
+        self.setMinimumHeight(CARD_HEIGHT + 30)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(3, 3, 3, 3)
+        self.plus = QLabel("+")
+        self.plus.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.plus)
+        self.refresh_theme()
+
+    def refresh_theme(self):
+        accent = QColor(theme.color("accent"))
+        r, g, b = accent.red(), accent.green(), accent.blue()
+        self.setStyleSheet(
+            f"QFrame#addBlockTile {{ border: 2px solid rgb({r}, {g}, {b}); border-radius: 8px;"
+            f" background-color: rgba({r}, {g}, {b}, 28); }}"
+            f"QFrame#addBlockTile:hover {{ background-color: rgba({r}, {g}, {b}, 60); }}"
+            f"QLabel {{ color: rgb({r}, {g}, {b}); font-size: 22pt; font-weight: 300; background: transparent;"
+            " border: none; }")
+        glow = QGraphicsDropShadowEffect(self)      # delikatna, nieruchoma poświata
+        glow.setColor(QColor(r, g, b, 150))
+        glow.setOffset(0, 0)
+        glow.setBlurRadius(18)
+        self.setGraphicsEffect(glow)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
 class Column(QFrame):
     """Kolumna tablicy (REACH / PICKING / INBOUND / OTHER): nagłówek + siatka stref."""
 
-    add_requested = Signal(str)   # „+" przy nagłówku: klucz kolumny
+    add_requested = Signal(str)                # pusty klocek „+": klucz kolumny
+    remove_requested = Signal(str, object)     # czerwony krzyżyk: klucz kolumny, klocek
+    edit_toggled = Signal(str, bool)           # zębatka przy nagłówku
 
     def __init__(self, title, zones, grid_columns, icon_name=None, key="", parent=None):
         super().__init__(parent)
@@ -518,31 +597,62 @@ class Column(QFrame):
         self.header = QLabel(title)
         self.header.setObjectName("columnHeader")
         header_row.addWidget(self.header)
+        self.edit_button = None
+        self.add_tile = None
         if key:
-            self.add_button = QToolButton()
-            self.add_button.setObjectName("addBlockButton")
-            self.add_button.setText("+ Add")
-            self.add_button.setCursor(Qt.PointingHandCursor)
-            self.add_button.setToolTip(f"Add a new block to {title}")
-            self.add_button.clicked.connect(lambda: self.add_requested.emit(self.key))
-            header_row.addSpacing(6)
-            header_row.addWidget(self.add_button)
+            self.edit_button = QToolButton()
+            self.edit_button.setObjectName("columnEditButton")
+            self.edit_button.setCheckable(True)
+            self.edit_button.setCursor(Qt.PointingHandCursor)
+            self.edit_button.setIconSize(QSize(16, 16))
+            self.edit_button.setFixedSize(24, 24)
+            self.edit_button.setToolTip(f"Edit the blocks of {title}: add (+) or remove (✕)")
+            self.edit_button.toggled.connect(self.set_editing)
+            header_row.addSpacing(2)
+            header_row.addWidget(self.edit_button)
         header_row.addStretch(1)
         layout.addLayout(header_row)
-        self.refresh_theme()
 
         grid = QGridLayout()
-        grid.setSpacing(4)
+        grid.setSpacing(6)
         for index, zone in enumerate(zones):
             grid.addWidget(zone, index // grid_columns, index % grid_columns, Qt.AlignTop)
+            zone.remove_clicked.connect(lambda z=zone: self.remove_requested.emit(self.key, z))
+        if key:
+            self.add_tile = AddBlockTile()
+            self.add_tile.clicked.connect(lambda: self.add_requested.emit(self.key))
+            index = len(zones)
+            grid.addWidget(self.add_tile, index // grid_columns, index % grid_columns, Qt.AlignTop)
+            self.add_tile.hide()
         for col in range(grid_columns):
             grid.setColumnStretch(col, 1)
         layout.addLayout(grid)
         layout.addStretch()
+        self.refresh_theme()
+
+    @property
+    def editing(self):
+        return bool(self.edit_button and self.edit_button.isChecked())
+
+    def set_editing(self, on):
+        """Tryb edycji: klocki podświetlone z czerwonym krzyżykiem, na końcu pusty klocek „+"."""
+        if self.edit_button is None:
+            return
+        if self.edit_button.isChecked() != on:
+            self.edit_button.setChecked(on)      # wywoła tę metodę jeszcze raz
+            return
+        for zone in self.zones:
+            zone.set_editing(on, removable=zone.title not in PROTECTED_ZONES)
+        self.add_tile.setVisible(on)
+        self.edit_toggled.emit(self.key, on)
 
     def refresh_theme(self):
         if self.icon_name:
             self.icon_label.setPixmap(theme.tinted_pixmap(self.icon_name, theme.color("muted"), 20))
+        if self.edit_button is not None:
+            self.edit_button.setIcon(theme.icon("settings"))
+        if self.add_tile is not None:
+            self.add_tile.refresh_theme()
 
     def update_count(self):
         people = {emp_id for zone in self.zones for emp_id in zone.ids()}
@@ -615,6 +725,7 @@ class MonitoringView(QWidget):
         self.board_body = None
         self._zones_signature = None
         self.columns = []
+        self.editing_columns = set()   # kolumny w trybie edycji (zostają po przebudowie tablicy)
         self.dragging = False
         self._signature = None
         self.zones = {}           # dział -> DropZone (działy bez stref, także Ziek / Naar Huis)
@@ -781,8 +892,9 @@ class MonitoringView(QWidget):
             body_layout.addWidget(self.halls[hall])
 
         inbound = [d for d in TEAM_LIST if is_inbound(d)]
-        other = [d for d in TEAM_LIST
-                 if d not in SUB_POSITIONS and d not in SIDE_DEPARTMENTS and d not in inbound]
+        inbound = [d for d in inbound if d not in HIDDEN_DEPARTMENTS]
+        other = [d for d in TEAM_LIST if d not in SUB_POSITIONS and d not in SIDE_DEPARTMENTS
+                 and not is_inbound(d) and d not in HIDDEN_DEPARTMENTS]
         shared = [
             Column("INBOUND", self._ordered_zones("Both:Inbound", inbound, self._department_zone), 1, "inbound",
                    "Both:Inbound"),
@@ -800,6 +912,10 @@ class MonitoringView(QWidget):
         self.board_body = body
         for column in self.columns:
             column.add_requested.connect(self._add_block)
+            column.remove_requested.connect(self._remove_block)
+            column.edit_toggled.connect(self._edit_toggled)
+            if column.key in self.editing_columns:
+                column.set_editing(True)
         self._zones_signature = board_signature()
         for column in self.columns:
             column.refresh_theme()
@@ -843,35 +959,29 @@ class MonitoringView(QWidget):
             return
         from .config import hours_columns
         from .monitoring_dialogs import NewDepartmentDialog
-        dialog = NewDepartmentDialog(kind.upper(), hours_columns(), self)
+        hidden = sorted((d for d in HIDDEN_DEPARTMENTS if is_inbound(d) == (kind == "Inbound")), key=str.lower)
+        dialog = NewDepartmentDialog(kind.upper(), hours_columns(), hidden, self)
         if dialog.exec() != NewDepartmentDialog.Accepted:
             return
         name, column = dialog.values()
         if name:
             self.board_edit_requested.emit("add_department", {"name": name, "group": kind, "hours_column": column})
 
+    def _edit_toggled(self, key, on):
+        (self.editing_columns.add if on else self.editing_columns.discard)(key)
+
     def _block_menu(self, zone, global_pos):
+        if not zone.position:
+            return
+        dept, name = zone.department, zone.position
         menu = QMenu(self)
-        if zone.position:
-            dept, name = zone.department, zone.position
-            locked = name in PROTECTED_ZONES
-            rename = menu.addAction("Rename…", lambda: self._rename_block(dept, name))
-            other = "South" if hall_of(dept, name) == "North" else "North"
-            menu.addAction(f"Move to {other} hall",
-                           lambda: self.board_edit_requested.emit("zone_hall", {"department": dept, "name": name,
-                                                                                "hall": other}))
-            menu.addSeparator()
-            remove = menu.addAction("Remove block…", lambda: self._remove_block("remove_zone", dept, name))
-            if locked:
-                for action in (rename, remove):
-                    action.setEnabled(False)
-                menu.addAction("(used by the consolidation list / Reflex hours)").setEnabled(False)
-        else:
-            dept = zone.department
-            remove = menu.addAction("Remove block…", lambda: self._remove_block("remove_department", dept, dept))
-            if dept not in EXTRA_DEPARTMENTS:
-                remove.setEnabled(False)
-                menu.addAction("(standard department – cannot be removed)").setEnabled(False)
+        rename = menu.addAction("Rename…", lambda: self._rename_block(dept, name))
+        other = "South" if hall_of(dept, name) == "North" else "North"
+        menu.addAction(f"Move to {other} hall",
+                       lambda: self.board_edit_requested.emit("zone_hall", {"department": dept, "name": name,
+                                                                            "hall": other}))
+        if name in PROTECTED_ZONES:
+            rename.setEnabled(False)
         menu.exec(global_pos)
 
     def _rename_block(self, dept, name):
@@ -880,16 +990,28 @@ class MonitoringView(QWidget):
         if ok and new and new != name:
             self.board_edit_requested.emit("rename_zone", {"department": dept, "old": name, "new": new})
 
-    def _remove_block(self, action, dept, name):
-        answer = QMessageBox.question(self, "Remove block", f"Remove '{name}' from the board for everyone?")
-        if answer == QMessageBox.Yes:
-            self.board_edit_requested.emit(action, {"department": dept, "name": name})
+    def remove_question(self, zone):
+        count = len(zone.ids())
+        people = f"{count} employee" + ("" if count == 1 else "s")
+        text = f"Are you sure you want to remove the block '{zone.title}' containing {people}?"
+        if count:
+            text += "\n\nThey go to Unassigned."
+        return text
+
+    def _remove_block(self, key, zone):
+        answer = QMessageBox.question(self, "Remove block", self.remove_question(zone))
+        if answer != QMessageBox.Yes:
+            return
+        if zone.position:
+            self.board_edit_requested.emit("remove_zone", {"department": zone.department, "name": zone.position})
+        else:
+            self.board_edit_requested.emit("hide_department", {"name": zone.department})
 
     def _show_drop_targets(self, key, title, started):
-        """Przenoszony klocek przygasa, a klocki tej samej kolumny (tam można go upuścić) się unoszą."""
+        """Przenoszony klocek przygasa, a klocki tej samej kolumny (tam można go upuścić) mają niebieską ramkę."""
         for zone in self.board_zones:
             if not started or zone.column_key != key:
-                zone.set_lift(None)
+                zone.set_lift("target" if zone.editing else None)
             else:
                 zone.set_lift("source" if zone.title == title else "target")
 
@@ -1013,6 +1135,8 @@ class MonitoringView(QWidget):
                     unassigned.append(emp)
             elif dept in in_zones:
                 in_zones[dept].append(emp)
+            elif dept in HIDDEN_DEPARTMENTS:
+                unassigned.append(emp)     # klocek zdjęty z tablicy – godziny zostają w dziale
             else:
                 other.append(emp)
 

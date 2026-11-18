@@ -198,10 +198,18 @@ def test_board_operations_on_zones(temp_db):
     assert _emp(emp_id).positions == ["Mars Nederland"]
     assert db.set_zone_hall("Reachtruck", "Mars Nederland", "North") == []
     assert config.hall_of("Reachtruck", "Mars Nederland") == "North"
-    assert db.remove_zone("Reachtruck", "Mars Nederland")                 # ktoś w niej jest
-    db.set_positions_in_db(emp_id, ["Noord"])
-    assert db.remove_zone("Reachtruck", "Mars Nederland") == []
+    assert db.remove_zone("Reachtruck", "Mars Nederland") == []            # ktoś w niej był -> Unassigned
     assert "Mars Nederland" not in config.SUB_POSITIONS["Reachtruck"]
+    assert _emp(emp_id).positions == []
+
+
+def test_removing_a_zone_keeps_the_other_zones_of_its_people(temp_db):
+    emp_id = make_employee(department="Reachtruck")
+    db.set_positions_in_db(emp_id, ["Noord", "Zuid"])
+    assert db.remove_zone("Reachtruck", "Noord") == []
+    assert _emp(emp_id).positions == ["Zuid"]
+    for zone in config.PROTECTED_ZONES:
+        assert db.remove_zone("Reachtruck", zone)                        # te dwie zostają
 
 
 def test_added_department_on_board_and_in_hours(temp_db):
@@ -212,22 +220,53 @@ def test_added_department_on_board_and_in_hours(temp_db):
     assert config.HOURS_COLUMN_MAP["Inbound 6"] == "Lossen - inslag controle"
     assert "Sorteren" not in config.HOURS_COLUMN_MAP                      # kolumna wybierana przy zapisie
 
-    emp_id = make_employee(department="Sorteren")
-    assert db.load_employees_from_db()[0].active_department == "Sorteren"
-    assert db.remove_department("Laden")                                  # wbudowanego nie
-    assert db.remove_department("Sorteren")                               # ktoś w nim jest
-    assert db.move_employees_in_db([emp_id], "Laden", "", "07:00", from_start=True) == []
-    assert db.remove_department("Sorteren") == []
-    assert "Sorteren" not in config.TEAM_LIST
+
+def test_removed_department_block_sends_people_to_unassigned(temp_db, app):
+    emp_id = make_employee(department="Laden")
+    assert db.hide_department("Laden") == []
+    assert "Laden" in config.HIDDEN_DEPARTMENTS and "Laden" in config.TEAM_LIST   # dział i godziny zostają
+    view = MonitoringView(layout_store=MemoryLayoutStore())
+    view.set_employees(db.load_employees_from_db())
+    assert "Laden" not in view.zone_order("Both:Other")
+    assert view.unassigned.ids() == [emp_id]
+    assert _emp(emp_id).computed_hours == "8.00"
+
+    assert db.add_department("laden", "Other", "") == []                  # z powrotem przez pusty klocek „+"
+    assert "Laden" not in config.HIDDEN_DEPARTMENTS
+    view.update_zones()
+    view.set_employees(db.load_employees_from_db(), force=True)
+    assert view.zones["Laden"].ids() == [emp_id] and view.unassigned.ids() == []
+
+
+def test_column_edit_mode(temp_db, app):
+    view = MonitoringView(layout_store=MemoryLayoutStore())
+    column = next(c for c in view.columns if c.key == "North:Reachtruck")
+    noord = view.position_zones[("Reachtruck", "Noord")]
+    kantel = view.position_zones[("Reachtruck", "Kantel/Consolidatie")]
+    assert column.edit_button is not None and not column.add_tile.isVisibleTo(column)
+    assert all(c.edit_button is not None for c in view.columns)           # zębatka przy każdej kolumnie
+
+    column.edit_button.setChecked(True)
+    assert column.add_tile.isVisibleTo(column)
+    assert noord.remove_button.isVisibleTo(noord) and noord.property("dropTarget")
+    assert not kantel.remove_button.isVisibleTo(kantel)                  # chroniona – bez krzyżyka
+
+    asked = []
+    view.board_edit_requested.connect(lambda action, params: asked.append((action, params)))
+    emp_id = _reacher("Noord", lastname="Visser", firstname="Tom")
+    view.set_employees(db.load_employees_from_db())
+    assert "'Noord' containing 1 employee?" in view.remove_question(noord)
+
+    view._rebuild()                                                       # tryb edycji zostaje po przebudowie
+    column = next(c for c in view.columns if c.key == "North:Reachtruck")
+    assert column.editing and column.add_tile.isVisibleTo(column)
+    column.edit_button.setChecked(False)
+    assert not view.position_zones[("Reachtruck", "Noord")].property("dropTarget")
+    assert emp_id
 
 
 def test_board_shows_added_blocks(temp_db, app):
     view = MonitoringView(layout_store=MemoryLayoutStore())
-    columns = {c.key: c for c in view.columns}
-    assert all(hasattr(c, "add_button") for c in columns.values())       # „+" przy każdej kolumnie
-    asked = []
-    view.board_edit_requested.connect(lambda action, params: asked.append((action, params)))
-
     db.add_zone("Orderpicker", "Lidl", "North")
     db.add_department("Inbound 6", "Inbound", "")
     view.update_zones()

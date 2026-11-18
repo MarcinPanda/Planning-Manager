@@ -234,14 +234,21 @@ class NewDepartmentDialog(QDialog):
 
     ASK_LATER = "– choose when writing hours –"
 
-    def __init__(self, column_title, hours_columns, parent=None):
+    def __init__(self, column_title, hours_columns, hidden=(), parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"New block in {column_title}")
+        self.hidden = {h.casefold() for h in hidden}
         layout = QGridLayout(self)
         layout.addWidget(QLabel("Name:"), 0, 0)
-        self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("e.g. Inbound 6")
-        layout.addWidget(self.name_edit, 0, 1)
+        self.name_combo = QComboBox()
+        self.name_combo.setEditable(True)        # nowa nazwa albo dział zdjęty wcześniej z tablicy
+        self.name_combo.addItems(list(hidden))
+        self.name_combo.setCurrentText("")
+        self.name_combo.lineEdit().setPlaceholderText("e.g. Inbound 6" + ("  (or pick a removed one)" if hidden
+                                                                            else ""))
+        self.name_combo.currentTextChanged.connect(self._name_changed)
+        self.name_edit = self.name_combo.lineEdit()
+        layout.addWidget(self.name_combo, 0, 1)
         layout.addWidget(QLabel("Hours go to column\n(hours file):"), 1, 0)
         self.column_combo = QComboBox()
         self.column_combo.addItem(self.ASK_LATER, "")
@@ -253,6 +260,10 @@ class NewDepartmentDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons, 2, 0, 1, 2)
         self.setMinimumWidth(420)
+
+    def _name_changed(self, text):
+        # dział zdjęty z tablicy wraca ze swoją kolumną godzin
+        self.column_combo.setEnabled(text.strip().casefold() not in self.hidden)
 
     def values(self):
         return self.name_edit.text().strip(), self.column_combo.currentData() or ""

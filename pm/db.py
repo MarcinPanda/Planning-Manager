@@ -87,7 +87,8 @@ def _create_change_tracking(cursor):
     że trzeba odświeżyć widok."""
     cursor.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)")
     cursor.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('changes', 0)")
-    for table in ("employees", "departments", "consolidation", "logins", "shifts", "zones", "extra_departments"):
+    for table in ("employees", "departments", "consolidation", "logins", "shifts", "zones", "extra_departments",
+                  "hidden_departments"):
         for event in ("INSERT", "UPDATE", "DELETE"):
             cursor.execute(f"""
                 CREATE TRIGGER IF NOT EXISTS trg_{table}_{event.lower()} AFTER {event} ON {table}
@@ -331,6 +332,7 @@ def _create_zones(cursor):
             hours_column TEXT NOT NULL DEFAULT ''
         )
     """)
+    cursor.execute("CREATE TABLE IF NOT EXISTS hidden_departments (name TEXT PRIMARY KEY)")
     if cursor.execute("SELECT 1 FROM zones LIMIT 1").fetchone():
         return
     for dept, entries in config.DEFAULT_ZONES.items():
@@ -345,9 +347,12 @@ def load_zones():
     try:
         rows = conn.execute("SELECT department, name, hall FROM zones ORDER BY department, sort, id").fetchall()
         extra = conn.execute("SELECT name, grp, hours_column FROM extra_departments ORDER BY name").fetchall()
+        hidden = [r[0] for r in conn.execute("SELECT name FROM hidden_departments").fetchall()]
     finally:
         conn.close()
     config.apply_extra_departments(extra)
+    config.HIDDEN_DEPARTMENTS.clear()
+    config.HIDDEN_DEPARTMENTS.update(hidden)
     zones = {dept: [] for dept in config.DEFAULT_ZONES}
     for dept, name, hall in rows:
         zones.setdefault(dept, []).append((name, hall))
@@ -361,9 +366,10 @@ def _last_department(cursor, emp_id):
     return row[0] if row else ""
 
 
-def save_zones(department, entries, renames=None):
+def save_zones(department, entries, renames=None, evict=False):
     """Nowa lista stref działu: entries = [(nazwa, hala)] w kolejności, renames = {stara nazwa: nowa}.
-    Osoby w strefie o zmienionej nazwie zostają w niej. Zwraca listę błędów (wtedy nic nie jest zapisane)."""
+    Osoby w strefie o zmienionej nazwie zostają w niej. Usunięta strefa z ludźmi: evict=True zdejmuje ją
+    tym osobom (bez innej strefy trafiają do Unassigned), inaczej błąd. Zwraca listę błędów (nic nie zapisane)."""
     renames = {old: new for old, new in (renames or {}).items() if old != new}
     entries = [(name.strip(), hall) for name, hall in entries]
     errors = []
@@ -392,21 +398,27 @@ def save_zones(department, entries, renames=None):
             if name in config.PROTECTED_ZONES:
                 errors.append(f"'{name}' cannot be removed (used by the consolidation list / Reflex hours).")
 
-        # strefa z ludźmi (na wyświetlanej zmianie) nie znika – najpierw trzeba ich przenieść
+        # strefa z ludźmi (na wyświetlanej zmianie): bez evict nie znika, z evict – ludzie tracą tę strefę
         shift_id = _resolve_shift(cursor)
-        people = {}
+        people, evicted = {}, []
         if removed and shift_id is not None:
             for emp_id, last, first, position in cursor.execute(
                     "SELECT id, lastname, firstname, position FROM employees WHERE shift_id = ? AND position != ''",
                     (shift_id,)).fetchall():
                 if _last_department(cursor, emp_id) != department:
                     continue
-                for name in set(split_positions(position)) & set(removed):
+                gone = set(split_positions(position)) & set(removed)
+                for name in gone:
                     people.setdefault(name, []).append(f"{first} {last}")
-        for name, who in people.items():
-            errors.append(f"'{name}' still has people: {', '.join(sorted(who)[:5])} – move them first.")
+                if gone:
+                    evicted.append((emp_id, join_positions([p for p in split_positions(position) if p not in gone])))
+        if not evict:
+            for name, who in people.items():
+                errors.append(f"'{name}' still has people: {', '.join(sorted(who)[:5])} – move them first.")
         if errors:
             return errors
+        for emp_id, position in evicted:
+            cursor.execute("UPDATE employees SET position = ? WHERE id = ?", (position, emp_id))
 
         if renames:
             for table, key, column in (("employees", "id", "position"),
@@ -424,7 +436,8 @@ def save_zones(department, entries, renames=None):
         cursor.executemany("INSERT INTO zones (department, name, hall, sort) VALUES (?, ?, ?, ?)",
                            [(department, name, hall, i) for i, (name, hall) in enumerate(entries)])
         parts = [f"renamed {old} -> {new}" for old, new in renames.items()]
-        parts += [f"removed {name}" for name in removed]
+        parts += [f"removed {name}" + (f" ({len(people[name])} people -> Unassigned)" if people.get(name) else "")
+                  for name in removed]
         added = [name for name in names if name not in old_names and name not in renames.values()]
         parts += [f"added {name}" for name in added]
         _record(cursor, "Zones", f"{config.SUB_POSITION_TITLES.get(department, department)}: "
@@ -464,27 +477,34 @@ def set_zone_hall(department, name, hall):
 
 
 def remove_zone(department, name):
+    """Czerwony krzyżyk na klocku strefy: strefa znika, jej ludzie (bez innej strefy) idą do Unassigned."""
     load_zones()
-    return save_zones(department, [(n, h) for n, h in _zone_entries(department) if n != name])
+    return save_zones(department, [(n, h) for n, h in _zone_entries(department) if n != name], evict=True)
 
 
 def add_department(name, group, hours_column):
-    """Nowy dział na tablicy (kolumna INBOUND albo OTHER) z kolumną w pliku godzin. Zwraca listę błędów."""
+    """Pusty klocek „+" w INBOUND / OTHER: przywraca ukryty dział albo dodaje nowy (z kolumną w pliku godzin).
+    Zwraca listę błędów."""
     name = name.strip()
     load_zones()
     if not name:
         return ["A department needs a name."]
-    if name.casefold() in {t.casefold() for t in config.TEAM_LIST}:
-        return [f"'{name}' already exists."]
-    if group not in ("Inbound", "Other"):
-        return ["Column must be INBOUND or OTHER."]
+    hidden = {h.casefold(): h for h in config.HIDDEN_DEPARTMENTS}
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO extra_departments (name, grp, hours_column) VALUES (?, ?, ?)",
-                       (name, group, hours_column or ""))
-        _record(cursor, "Departments", f"added {name} ({group}" + (f", hours -> {hours_column})" if hours_column
-                                                                    else ")"))
+        if name.casefold() in hidden:
+            cursor.execute("DELETE FROM hidden_departments WHERE name = ?", (hidden[name.casefold()],))
+            _record(cursor, "Departments", f"back on the board: {hidden[name.casefold()]}")
+        elif name.casefold() in {t.casefold() for t in config.TEAM_LIST}:
+            return [f"'{name}' is already on the board."]
+        elif group not in ("Inbound", "Other"):
+            return ["Column must be INBOUND or OTHER."]
+        else:
+            cursor.execute("INSERT INTO extra_departments (name, grp, hours_column) VALUES (?, ?, ?)",
+                           (name, group, hours_column or ""))
+            _record(cursor, "Departments", f"added {name} ({group}"
+                    + (f", hours -> {hours_column})" if hours_column else ")"))
         conn.commit()
     finally:
         conn.close()
@@ -492,25 +512,17 @@ def add_department(name, group, hours_column):
     return []
 
 
-def remove_department(name):
-    """Usuwa dział dodany na tablicy (wbudowanych nie). Nie, gdy ktoś jest w nim na wyświetlanej zmianie."""
+def hide_department(name):
+    """Czerwony krzyżyk na klocku działu: klocek znika z tablicy (dla wszystkich). Ludzie zostają w dziale
+    (godziny bez zmian) i pokazują się w Unassigned, skąd można ich przeciągnąć."""
     load_zones()
-    if name not in config.EXTRA_DEPARTMENTS:
-        return [f"'{name}' is a standard department and cannot be removed."]
+    if name not in config.TEAM_LIST:
+        return [f"'{name}' is not a department."]
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        shift_id = _resolve_shift(cursor)
-        who = []
-        if shift_id is not None:
-            for emp_id, last, first in cursor.execute(
-                    "SELECT id, lastname, firstname FROM employees WHERE shift_id = ?", (shift_id,)).fetchall():
-                if _last_department(cursor, emp_id) == name:
-                    who.append(f"{first} {last}")
-        if who:
-            return [f"'{name}' still has people: {', '.join(sorted(who)[:5])} – move them first."]
-        cursor.execute("DELETE FROM extra_departments WHERE name = ?", (name,))
-        _record(cursor, "Departments", f"removed {name}")
+        cursor.execute("INSERT OR IGNORE INTO hidden_departments (name) VALUES (?)", (name,))
+        _record(cursor, "Departments", f"removed from the board: {name}")
         conn.commit()
     finally:
         conn.close()

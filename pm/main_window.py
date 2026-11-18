@@ -661,11 +661,11 @@ class MainWindow(QMainWindow):
         "zone_hall": lambda p: db.set_zone_hall(p["department"], p["name"], p["hall"]),
         "remove_zone": lambda p: db.remove_zone(p["department"], p["name"]),
         "add_department": lambda p: db.add_department(p["name"], p["group"], p["hours_column"]),
-        "remove_department": lambda p: db.remove_department(p["name"]),
+        "hide_department": lambda p: db.hide_department(p["name"]),
     }
 
     def board_edit(self, action, params):
-        """Klocek dodany / zmieniony / usunięty na tablicy (+ przy kolumnie, prawy klik na nazwie) – dla wszystkich."""
+        """Klocek dodany / zmieniony / usunięty na tablicy (zębatka przy kolumnie, prawy klik) – dla wszystkich."""
         edit = self.BOARD_EDITS[action]
 
         def done(errors):

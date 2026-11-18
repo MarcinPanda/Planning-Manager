@@ -101,11 +101,14 @@ Monitoring to „oczy steeringu": kto gdzie teraz jest i co robi.
 - U góry liczniki: na zmianie, Reach, Picking, Inbound, Other, Unassigned, Ziek, Naar Huis.
 - Hale **North** i **South** (nagłówek zwija halę): kolumny REACH i PICKING, w nich strefy / klienci.
 - **Klocki edytuje się na tablicy** (dla wszystkich komputerów, zapis w bazie; Ctrl+Z tego nie cofa):
-  - **+ Add** przy nazwie kolumny = nowy klocek w tej kolumnie i hali. W REACH / PICKING to strefa / klient,
-    w INBOUND / OTHER – nowy dział (pyta też, do której kolumny pliku godzin idą jego godziny);
-  - **prawy klik na nazwie klocka** = *Rename…*, *Move to North / South hall*, *Remove block…*;
-  - klocka z ludźmi na tej zmianie nie da się usunąć; po zmianie nazwy ludzie zostają w klocku;
-  - Kantel/Consolidatie i Reflex – bez zmiany nazwy i usuwania; standardowych działów nie da się usunąć.
+  - **zębatka** przy nazwie kolumny (REACH / PICKING w każdej hali, INBOUND, OTHER) = tryb edycji tej kolumny:
+    klocki mają niebieską ramkę i **czerwony ✕** w prawym górnym rogu, a na końcu jest pusty klocek **+**;
+  - **+** = nowy klocek. W REACH / PICKING to strefa / klient tej hali; w INBOUND / OTHER – nowy dział (pyta, do
+    której kolumny pliku godzin idą jego godziny) albo dział usunięty wcześniej z tablicy;
+  - **✕** = pytanie „usunąć klocek X, w którym jest N pracowników?". Ludzie trafiają do **Unassigned**.
+    Strefa znika na stałe; dział znika tylko z tablicy (godziny ludzi zostają w tym dziale, a z Unassigned można ich
+    przeciągnąć). Kantel/Consolidatie i Reflex nie mają ✕ (korzysta z nich lista konsolidacji i godziny);
+  - **prawy klik na nazwie strefy** = *Rename…* (ludzie zostają w klocku), *Move to North / South hall*.
 - **Przenoszenie klocków**: klocek łapie się za **nazwę** (nagłówek) i upuszcza na inny klocek tej samej kolumny
   (Reach, Picking, Inbound, Other) – bez włączania żadnego trybu; za kartę osoby nadal przenosi się osobę. W trakcie
   przenoszenia klocki, na które można upuścić, mają dookoła niebieską ramkę, a przenoszony jest przygaszony.

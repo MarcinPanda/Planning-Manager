@@ -83,8 +83,8 @@ co aplikacja** (tak jest domyślnie, bez żadnego ustawiania). Inne miejsce na b
 
 ## Etap 4 – tablica do ułożenia po swojemu ✅ (punkty 1–2 zrobione 18.11 – do sprawdzenia w pracy)
 
-Zrobione: tabele `zones` i `extra_departments` w bazie; klocki dodaje się (+ Add przy kolumnie), zmienia i usuwa
-(prawy klik na nazwie) prosto na tablicy – także nowe działy w INBOUND / OTHER; klocki przenoszone za nazwę zawsze (bez trybu, ustalone 18.11)
+Zrobione: tabele `zones` i `extra_departments` w bazie; zębatka przy kolumnie = tryb edycji: czerwony ✕ na klockach
+(ludzie do Unassigned) i pusty klocek „+" na końcu, prawy klik = zmiana nazwy / hali – także działy w INBOUND / OTHER; klocki przenoszone za nazwę zawsze (bez trybu, ustalone 18.11)
 + niebieska ramka miejsc docelowych, ⋯ → *Reset board layout*. Strefa po zmianie
 nazwy na komputerze z własnym ułożeniem trafia na koniec kolumny (wystarczy ją przestawić). Punkt 3 – do decyzji.
 

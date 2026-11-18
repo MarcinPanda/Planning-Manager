@@ -33,6 +33,7 @@ Wersja układu: `PRAGMA user_version` (obecnie 2). Program sam przenosi starsze 
 | `consolidation_prev` | strefy reachera sprzed RIT-u | `employee_id`, `positions` |
 | `change_log` | dziennik zmian (kto, kiedy, co) + dane do Cofnij | `ts`, `user`, `action`, `details`, `undo_data`, `undone` |
 | `extra_departments` | działy dodane na tablicy (+ Add przy INBOUND / OTHER) | `name`, `grp` (Inbound / Other), `hours_column` (kolumna w pliku godzin, pusta = wybór przy zapisie) |
+| `hidden_departments` | działy zdjęte z tablicy czerwonym ✕ (ludzie z nich są w Unassigned, godziny bez zmian) | `name` |
 | `zones` | strefy / klienci na tablicy Monitoring (+ Add / prawy klik na klocku), wspólne dla wszystkich komputerów | `department` (Reachtruck / Orderpicker), `name` (tak jak w `employees.position`), `hall` (North / South), `sort` (kolejność) |
 | `zone_periods` | kiedy osoba weszła do strefy Reflex i z niej wyszła (zapisują to wyzwalacze przy każdej zmianie `employees.position`) | `employee_id`, `zone`, `time_from` (HH:MM, pusty = od początku zmiany), `time_to` (NULL = nadal w strefie) |
 | `meta` | licznik zmian | `key = 'changes'`, `value` |
