@@ -91,6 +91,7 @@ SIDE_DEPARTMENTS = ("Ziek", "Naar Huis")   # w panelu po prawej, nie na tablicy
 STATUS_COLORS = {"sick": ROW_COLOR_SICK, "home": ROW_COLOR_HOME, "late": ROW_COLOR_LATE}
 CHIP_COLOR = "#DCEBFF"
 CARD_HEIGHT = 22
+TITLE_SIDE = 14       # odstęp nazwy klocka od boków (miejsce na krzyżyk usuwania)
 
 HALL_COLORS = {"North": "#1f6fb2", "South": "#c06a1b", "Both halls": "#4a5966"}
 
@@ -376,6 +377,8 @@ class DropZone(QFrame):
         self.accepts_drops = accepts_drops
         self.column_key = ""      # kolumna tablicy (klocek da się przenieść za nagłówek); '' = poza tablicą
         self._press_pos = None
+        self._frame_mode = None
+        self._hover = False
         self.fit = fit            # True: wysokość dopasowana do liczby kart (bez przewijania)
         self.min_rows = min_rows
         self.show_leave = show_leave  # Ziek / Naar Huis: godzina wyjścia na karcie
@@ -411,14 +414,13 @@ class DropZone(QFrame):
         self.remove_button.clicked.connect(self.remove_clicked)
         self.remove_button.hide()
         self.editing = False
+        self.apply_frame()
 
     def set_editing(self, on, removable=True):
         """Tryb edycji kolumny: niebieska ramka i (gdy wolno usunąć) czerwony krzyżyk."""
         self.editing = on
         self.set_lift("target" if on else None)
         self.remove_button.setVisible(on and removable)
-        side = 20 if on else 0                     # miejsce na krzyżyk – nazwa i liczba osób go nie wchodzą pod niego
-        self.title_label.setContentsMargins(side, 0, side, 0)
         if not removable:
             self.title_label.setToolTip("Used by the consolidation list / Reflex hours – cannot be removed")
         self._place_remove_button()
@@ -439,6 +441,8 @@ class DropZone(QFrame):
         """Klocek tablicy: złapany za nagłówek przenosi się w obrębie kolumny (karty osób działają jak zwykle)."""
         self.column_key = column_key
         self.setAcceptDrops(True)       # karty osób odbiera lista; klocki – ramka (zdarzenie przechodzi wyżej)
+        # stałe miejsce na krzyżyk z trybu edycji – włączenie trybu niczego nie przesuwa
+        self.title_label.setContentsMargins(TITLE_SIDE, 0, TITLE_SIDE, 0)
         self.title_label.setCursor(Qt.OpenHandCursor)
         self.title_label.setToolTip("Drag the title to move this block · right-click: rename")
         self.title_label.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -460,14 +464,22 @@ class DropZone(QFrame):
                 self._press_pos = None
         return super().eventFilter(obj, event)
 
+    def apply_frame(self):
+        """Ramka klocka: zawsze 2 px (zmienia się tylko kolor), więc podświetlenie niczego nie przesuwa."""
+        lit = self._frame_mode == "target" or self._hover
+        color = theme.color("accent") if lit else theme.color("border")
+        self.setStyleSheet(f"DropZone {{ background-color: {theme.color('surface')}; border: 2px solid {color};"
+                           " border-radius: 8px; }"
+                           "QLabel#zoneTitle { font-weight: 700; background: transparent; border: none; }"
+                           "QListWidget { background: transparent; border: none; }")
+
     def set_lift(self, mode):
         """Podpowiedź przy przenoszeniu klocka: 'target' = tu można upuścić (niebieska ramka dookoła),
         'source' = przenoszony klocek (przygaszony), None = zwykły wygląd."""
         self.setGraphicsEffect(None)
         self.setProperty("dropTarget", mode == "target")
-        accent = theme.color("accent")
-        self.setStyleSheet(f"DropZone {{ border: 2px solid {accent}; border-radius: 8px; }}"
-                           if mode == "target" else "")
+        self._frame_mode = mode
+        self.apply_frame()
         if mode == "source":
             effect = QGraphicsOpacityEffect(self)
             effect.setOpacity(0.35)
@@ -526,8 +538,8 @@ class DropZone(QFrame):
     def _set_hover(self, on):
         """Podświetlenie ramki, gdy nad strefą jest przeciągana karta (kolor z motywu)."""
         self.setProperty("hover", bool(on))
-        self.style().unpolish(self)
-        self.style().polish(self)
+        self._hover = bool(on)
+        self.apply_frame()
 
     def _fit_height(self, count):
         if self.fit:
@@ -562,6 +574,22 @@ class DropZone(QFrame):
         self._fit_height(count)
 
 
+_EMPTY_ZONE_HEIGHT = []
+
+
+def empty_zone_height():
+    """Wysokość pustego klocka z jednowierszową nazwą (mierzona na prawdziwym klocku, z motywem)."""
+    if not _EMPTY_ZONE_HEIGHT:
+        probe = DropZone("Probe", "", "")
+        probe.enable_block_drag("probe")
+        probe.ensurePolished()
+        probe.title_label.ensurePolished()
+        probe.list.ensurePolished()
+        _EMPTY_ZONE_HEIGHT.append(probe.sizeHint().height())
+        probe.deleteLater()
+    return _EMPTY_ZONE_HEIGHT[0]
+
+
 class AddBlockTile(QFrame):
     """Pusty klocek z plusem na końcu kolumny (tryb edycji): kliknięcie = nowy klocek."""
 
@@ -572,7 +600,8 @@ class AddBlockTile(QFrame):
         self.setObjectName("addBlockTile")
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip("Add a new block here")
-        self.setMinimumHeight(CARD_HEIGHT + 30)
+        self.setMinimumWidth(60)
+        self.setFixedHeight(empty_zone_height())
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(3, 3, 3, 3)
@@ -842,7 +871,7 @@ class MonitoringView(QWidget):
 
         # ---- panel po prawej
         side = QWidget()
-        side.setFixedWidth(205)
+        side.setFixedWidth(195)   # 205 - 5%: więcej miejsca na tablicę
         side_layout = QVBoxLayout(side)
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(6)
@@ -1102,6 +1131,8 @@ class MonitoringView(QWidget):
         self.group_button.setIcon(theme.icon("bulk"))
         for column in self.columns:
             column.refresh_theme()
+        for zone in self.all_zones + [self.other_zone] if hasattr(self, "other_zone") else self.all_zones:
+            zone.apply_frame()
 
     # ------------------------------------------------- tryb „od początku zmiany"
     @property

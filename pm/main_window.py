@@ -462,7 +462,7 @@ class MainWindow(QMainWindow):
         """Menu po lewej: logo + jeden przycisk z ikoną na widok (kolejne widoki = kolejna pozycja w VIEWS)."""
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(178)
+        sidebar.setFixedWidth(169)   # 178 - 5%: więcej miejsca na tablicę
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(12, 14, 12, 12)
         layout.setSpacing(4)
