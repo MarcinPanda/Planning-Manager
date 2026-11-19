@@ -395,6 +395,18 @@ class HistoryDialog(QDialog):
         layout.addWidget(close_btn)
 
 
+class _ToggleCell(QWidget):
+    """Komórka z ptaszkiem: klik w dowolne miejsce komórki przełącza ptaszek (nie tylko w mały kwadracik)."""
+
+    def __init__(self, box):
+        super().__init__()
+        self.box = box
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        self.box.toggle()
+
+
 class PlanHoursDialog(QDialog):
     """Po imporcie: osoby z godzinami 00:00-00:00 w planie (rezerwa albo błąd). Można wpisać godziny
     albo zostawić 0 h. rows = [(id, nazwisko, imię, dział, zmiana)]."""
@@ -409,8 +421,9 @@ class PlanHoursDialog(QDialog):
         layout = QVBoxLayout(self)
         info = QLabel(
             f"<b>{len(rows)} {'person has' if len(rows) == 1 else 'people have'} 00:00-00:00 in the plan</b> "
-            "– they count as <b>0 h</b>.<br>This is a reserve or a mistake in the plan. Tick a person and correct "
-            "the start / end time, or leave them at 0 h. You can change it later via <i>Edit Department</i>."
+            "– a mistake in the plan.<br>Everyone is ticked with the usual hours of their shift. Check the hours, "
+            "click a row to untick a person who should stay at 0 h. You can change it later via "
+            "<i>Edit Department</i>."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -426,7 +439,8 @@ class PlanHoursDialog(QDialog):
 
         for i, (_, last, first, dept, shift) in enumerate(rows):
             box = QCheckBox()
-            holder = QWidget()
+            box.setChecked(True)           # 00:00-00:00 to błąd planu – godziny zmiany zwykle są dobre
+            holder = _ToggleCell(box)
             h = QHBoxLayout(holder)
             h.setContentsMargins(0, 0, 0, 0)
             h.setAlignment(Qt.AlignCenter)
@@ -442,6 +456,8 @@ class PlanHoursDialog(QDialog):
             table.setCellWidget(i, 3, edit)
             self.boxes.append(box)
             self.edits.append(edit)
+        # klik w nazwisko / dział też przełącza ptaszek – duży cel zamiast małego kwadracika
+        table.cellClicked.connect(lambda row, col: col in (1, 2) and self.boxes[row].toggle())
         layout.addWidget(table, 1)
 
         buttons = QHBoxLayout()

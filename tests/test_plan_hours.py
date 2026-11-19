@@ -46,7 +46,7 @@ def test_dialog_proposes_shift_hours_and_returns_ticked(temp_db, qtbot=None):
     rows = [(1, "Nowak", "Ewa", "Laco", "Middag"), (2, "Dijk", "Piet", "Inbound 1", "Ochtend")]
     dlg = PlanHoursDialog(rows)
     assert [e.text() for e in dlg.edits] == ["15:00-00:00", "06:00-15:00"]
-    assert dlg.changes() == {}
+    assert dlg.changes() == {1: "15:00-00:00", 2: "06:00-15:00"}     # wszyscy zaznaczeni od razu
     dlg.edits[1].setText("07:00-15:00")
-    dlg.boxes[1].setChecked(True)
+    dlg.boxes[0].parentWidget().mousePressEvent(None)                  # klik obok kwadracika też działa
     assert dlg.changes() == {2: "07:00-15:00"}

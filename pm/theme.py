@@ -6,9 +6,10 @@
 Wybrany motyw jest zapamiętany dla użytkownika (QSettings).
 """
 import os
+import tempfile
 
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPalette, QPixmap
+from PySide6.QtCore import QPointF, QSettings, Qt
+from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPalette, QPen, QPixmap
 
 ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 ICON_DIR = os.path.join(ASSETS, "icons")
@@ -92,6 +93,24 @@ def white_icon(name):
     if key not in _icon_cache:
         _icon_cache[key] = QIcon(tinted_pixmap(name, "#ffffff"))
     return _icon_cache[key]
+
+
+def check_image(color_hex):
+    """Ptaszek do kwadracika QCheckBox (arkusz stylów potrzebuje pliku) – rysowany raz do folderu tymczasowego."""
+    path = os.path.join(tempfile.gettempdir(), f"planning_manager_check_{color_hex.lstrip('#')}.png")
+    if not os.path.exists(path):
+        try:
+            image = QImage(32, 32, QImage.Format_ARGB32_Premultiplied)
+            image.fill(Qt.transparent)
+            painter = QPainter(image)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(QPen(QColor(color_hex), 4.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.drawPolyline([QPointF(7, 17), QPointF(13, 23), QPointF(25, 9)])
+            painter.end()
+            image.save(path)
+        except Exception:
+            return ""
+    return path.replace("\\", "/")
 
 
 def stylesheet(p):
@@ -180,6 +199,12 @@ QRadioButton::indicator:checked {{ border-color: {p['accent']}; background: qrad
     radius:0.5, fx:0.5, fy:0.5, stop:0 {p['accent']}, stop:0.5 {p['accent']}, stop:0.6 {p['surface']},
     stop:1 {p['surface']}); }}
 QRadioButton::indicator:disabled {{ border-color: {p['border']}; }}
+QCheckBox::indicator, QListView::indicator, QTableView::indicator {{ width: 14px; height: 14px; border-radius: 3px;
+    border: 2px solid {p['muted']}; background: {p['surface']}; }}
+QCheckBox::indicator:hover, QListView::indicator:hover, QTableView::indicator:hover {{ border-color: {p['accent']}; }}
+QCheckBox::indicator:checked, QListView::indicator:checked, QTableView::indicator:checked {{
+    border-color: {p['accent']}; background: {p['accent']}; image: url("{check_image(p['accent_text'])}"); }}
+QCheckBox::indicator:disabled {{ border-color: {p['border']}; }}
 QPushButton#rowButton, QToolButton#rowButton {{ padding: 2px 10px; border-radius: 6px; }}
 QLabel#kpi {{ background-color: {p['surface2']}; border: 1px solid {p['border']}; border-radius: 7px;
               padding: 4px 10px; }}
