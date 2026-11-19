@@ -55,7 +55,7 @@ def test_main_window_builds(app, temp_db):
     assert len(window.visible_rows()[0]) == len(columns) - 1
 
     assert window.count_label.text() == "1 employees"
-    assert [b.text().strip() for b in window.view_buttons] == ["Planning", "Monitoring", "Consolidatie"]
+    assert [b.text().strip() for b in window.view_buttons] == ["Planning", "Monitoring", "Consolidatie", "Logins"]
     window.view_buttons[2].click()
     assert window.stack.currentWidget() is window.consolidation_view
     assert window.page_title.text() == "Consolidatie" and window.toggle_mark_button.isHidden()

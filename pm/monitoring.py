@@ -290,6 +290,7 @@ class EmployeeList(QListWidget):
         ids = [i.data(Qt.UserRole) for i in items]
         statuses = {i.data(Qt.UserRole + 1) for i in items}
         has_zones = {i.data(Qt.UserRole + 2) for i in items}
+        without_login = len(items) == 1 and not items[0].data(Qt.UserRole + 4)
 
         menu = QMenu(self)
         if statuses <= {"home", "sick"}:
@@ -303,6 +304,9 @@ class EmployeeList(QListWidget):
             menu.addSeparator()
             menu.addAction("Naar Huis (going home)…", lambda: self.action_requested.emit("home", ids))
             menu.addAction("Ziek (sick)…", lambda: self.action_requested.emit("sick", ids))
+        if without_login:
+            menu.addSeparator()
+            menu.addAction(theme.icon("login_add"), "Add login…", lambda: self.action_requested.emit("login", ids))
         menu.exec(self.viewport().mapToGlobal(pos))
 
     def startDrag(self, supported_actions):
@@ -712,6 +716,7 @@ class DropZone(QFrame):
             item.setData(Qt.UserRole, emp.employee_id)
             item.setData(Qt.UserRole + 1, emp.status)
             item.setData(Qt.UserRole + 2, emp.active_department in SUB_POSITIONS)
+            item.setData(Qt.UserRole + 4, emp.login)
             item.setBackground(QBrush(QColor(STATUS_COLORS.get(emp.status, CHIP_COLOR))))
             item.setForeground(QBrush(QColor("#000000")))
             item.setToolTip(employee_tooltip(emp))

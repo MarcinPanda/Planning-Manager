@@ -59,7 +59,7 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
 - „Ziek" i „Naar Huis" liczą się jako 0 h; „Naar Huis" skraca godziny pracy (celowo).
 - Oznaczanie spóźnienia („Late").
 - Kolory wierszy: chory, poszedł do domu, spóźniony.
-- Menu widoków po lewej: Planning, Monitoring, Consolidatie (skróty Ctrl+1 / Ctrl+2 / Ctrl+3).
+- Menu widoków po lewej: Planning, Monitoring, Consolidatie, Logins (skróty Ctrl+1 … Ctrl+4).
 - Cofnij (Ctrl+Z) – 30 ostatnich operacji.
 - Historia zmian: kto, kiedy, co.
 - Eksport widocznej tabeli do Excela i wydruk z podglądem.
@@ -95,7 +95,7 @@ Baza, kopie i pliki Excel zawierają dane pracowników i **nie trafiają do repo
 
 ## Widok Monitoring
 
-Aplikacja to jeden program z trzema widokami (Planning, Monitoring, Consolidatie) na jednej bazie.
+Aplikacja to jeden program z czterema widokami (Planning, Monitoring, Consolidatie, Logins) na jednej bazie.
 Monitoring to „oczy steeringu": kto gdzie teraz jest i co robi.
 
 - U góry liczniki: na zmianie, Reach, Picking, Inbound, Other, Unassigned, Ziek, Naar Huis.
@@ -127,8 +127,22 @@ Monitoring to „oczy steeringu": kto gdzie teraz jest i co robi.
   początku zmiany. Pomarańczowy pasek, gdy włączony; wyłącza się sam 30 min po starcie zmiany.
 - Instrukcje pod przyciskiem **?**.
 - „Nanomi Reachtruck" z planu to Reach ze strefą Na-Nomi.
-- „Import Logins" wczytuje spis loginów z Excela (plik Inlognamen z kodami N012P / R012R albo kolumny `Login:` i `Name:`); loginy są
-  dopasowywane po nazwisku i zostają w bazie na kolejne dni.
+- Prawy klik na osobie bez loginu → **Add login…**: wolny numer albo „Same person" – ten sam człowiek jest już w spisie
+  pod inną pisownią (np. „Markus" / „Markuss"); wtedy nazwisko w spisie zmienia się na takie jak w planie.
+
+### Widok Logins (loginy)
+
+- Jeden wiersz na numer **001–299**: kody **N…P** (picking) i **R…R** (reach), osoba, stan, *Today* ✓ (osoba jest
+  na pokazywanej zmianie), uwagi, kto i kiedy zmienił. Loginów Z…P nie ma (nieużywane).
+- Filtry *All / Free / Assigned / Damaged / Blocked* z licznikami i wyszukiwanie po numerze, nazwisku i uwagach.
+- W wierszu: **Assign…** (wolny numer → osoba), **Release** (zwolnienie), **Set OK**; **⋯** → *Damaged…* /
+  *Blocked…* z powodem, *Note…*. Uszkodzonego / zablokowanego loginu nie da się nikomu dać, dopóki nie jest OK.
+- Jedna osoba = jeden login: nowy numer zwalnia stary. Zwolnienie loginu, który jest reacherem na otwartym RIT-cie,
+  daje ostrzeżenie (sprawdź Consolidatie).
+- **Import Inlognamen…** (także Import ▾ → Logins): podgląd *nowe / bez zmian / pominięte (powód)* przed zapisem;
+  zajętych numerów import nigdy nie nadpisuje. Wszystkie zmiany są w historii (bez Ctrl+Z).
+- Przy pierwszym starcie nowej wersji dotychczasowe loginy przechodzą na numery same (kopia bazy przed zmianą
+  w `backups/before_schema_v3_*.db`). **Wszystkie komputery muszą mieć nową wersję** – stara nie widzi nowych loginów.
 
 ### Widok Consolidatie (lista RIT-ów)
 

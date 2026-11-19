@@ -1850,7 +1850,8 @@ def _migrate_logins(cursor):
                 cursor.execute("UPDATE login_numbers SET note = TRIM(note || ' / also in old list: ' || ?) "
                                "WHERE number = ?", (name, number))
             continue
-        _write_login(cursor, number, name=name, name_key=key)
+        # bez daty zmiany – to nie jest dzisiejsza zmiana, tylko przeniesienie starej listy
+        cursor.execute("UPDATE login_numbers SET name = ?, name_key = ? WHERE number = ?", (name, key, number))
         moved += 1
     _record(cursor, "Logins moved", f"{moved} logins moved to numbers 001–299"
             + (f"; not moved: {'; '.join(problems)}" if problems else ""))

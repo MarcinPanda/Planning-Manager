@@ -28,7 +28,8 @@ Wersja układu: `PRAGMA user_version` (obecnie 2). Program sam przenosi starsze 
 | `shifts` | zmiany: dzień + nazwa | `id`, `date` (YYYY-MM-DD), `name` (Ochtend / Middag), `created`, `created_by` |
 | `employees` | osoba na danej zmianie | `id`, `shift_id` → shifts, `lastname`, `firstname`, `current_department` (dział z planu), `work_hours` (np. 15:00-00:00, skrócone przez Naar Huis), `planned_hours` (z planu), `shift`, `computed_hours`, `position` (strefy / klienci rozdzieleni `;`), `late`, `info`, `marked` |
 | `departments` | przebieg działów osoby w ciągu zmiany | `employee_id`, `department`, `time_assigned` (pusty = od początku zmiany), kolejność wg `id` |
-| `logins` | spis loginów (z Inlognamen) | `name_key` (znormalizowane imię i nazwisko), `name`, `login` (np. `012` = N012P / R012R) |
+| `login_numbers` | loginy 001–299 (od wersji bazy 3) | `number` (`012` = N012P / R012R), `name`, `name_key`, `state` (`ok` / `damaged` / `blocked`), `note`, `changed`, `changed_by` |
+| `logins` | stary spis loginów po nazwisku (do wersji 2) – zostaje tylko jako źródło jednorazowego przeniesienia | `name_key`, `name`, `login` |
 | `consolidation` | lista RIT-ów | `datum`, `rit`, `seq`, `area`, `time`, `amount`, `kantel`, `reachers` (loginy lub `id:N`, `;`), `v`, `done`, `lane`, `comment`, `busy` |
 | `consolidation_prev` | strefy reachera sprzed RIT-u | `employee_id`, `positions` |
 | `change_log` | dziennik zmian (kto, kiedy, co) + dane do Cofnij | `ts`, `user`, `action`, `details`, `undo_data`, `undone` |
@@ -51,5 +52,10 @@ JOIN departments d ON d.id = (SELECT MAX(id) FROM departments WHERE employee_id 
 WHERE e.shift_id = :shift_id;
 ```
 
-Login osoby: `logins.login`, gdy `logins.name_key` = znormalizowane imię i nazwisko (małe litery, bez polskich
-znaków, słowa posortowane). Od Etapu 5 login będzie przypisany bezpośrednio do osoby.
+Login osoby: `login_numbers.number`, gdy `login_numbers.name_key` = znormalizowane imię i nazwisko (małe litery,
+bez polskich znaków, słowa posortowane); gdy dokładnego nie ma – jedyny login, którego słowa zawierają słowa osoby
+(albo odwrotnie). Status w zakładce: `blocked` / `damaged` ze `state`, inaczej `assigned` (jest osoba) albo `free`.
+
+```sql
+SELECT number, name, state, note FROM login_numbers WHERE name_key != '' ORDER BY number;
+```

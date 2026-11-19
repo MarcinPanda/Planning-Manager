@@ -60,6 +60,7 @@ from .dialogs import (
 )
 from .consolidation_view import ConsolidationView
 from .hours_dialog import HoursDialog, remember_columns, remembered_columns
+from .logins_view import LoginForPersonDialog, LoginImportDialog, LoginsView, similar_logins
 from .monitoring import MonitoringView
 from .monitoring_dialogs import GroupHomeDialog, LeaveDialog, TimeDialog, ZonePickerDialog
 from .table_model import EmployeeTableModel
@@ -70,8 +71,9 @@ VIEWS = [
     ("Planning", "Hours per department for the whole shift"),
     ("Monitoring", "Who is where right now – drag employees between departments"),
     ("Consolidatie", "Consolidation list (RITs) – reacher assignment changes their task on Monitoring"),
+    ("Logins", "Login numbers 001–299 – who has which login, free / damaged / blocked"),
 ]
-VIEW_ICONS = ["planning", "monitoring", "consolidation"]
+VIEW_ICONS = ["planning", "monitoring", "consolidation", "logins"]
 
 
 class MainWindow(QMainWindow):
@@ -145,11 +147,22 @@ class MainWindow(QMainWindow):
         self.consolidation_view.delete_requested.connect(self.delete_consolidation)
         self.consolidation_view.import_requested.connect(self.import_consolidation)
 
+        self.logins_view = LoginsView()
+        self.logins_view.assign_requested.connect(self.assign_login)
+        self.logins_view.release_requested.connect(
+            lambda number: self._login_task(lambda: db.release_login(number)))
+        self.logins_view.state_requested.connect(
+            lambda number, state, note: self._login_task(lambda: db.set_login_state(number, state, note)))
+        self.logins_view.note_requested.connect(
+            lambda number, note: self._login_task(lambda: db.set_login_note(number, note)))
+        self.logins_view.import_requested.connect(self.import_logins)
+
         # Kolejność = kolejność przycisków w menu po lewej (VIEWS)
         self.stack = QStackedWidget()
         self.stack.addWidget(self.table)
         self.stack.addWidget(self.monitoring_view)
         self.stack.addWidget(self.consolidation_view)
+        self.stack.addWidget(self.logins_view)
         self.main_layout.addWidget(self.stack)
 
         # legenda kolorów wierszy – tylko w Planning
@@ -351,6 +364,10 @@ class MainWindow(QMainWindow):
                 )
             except Exception as exc:  # lista konsolidacji nie może zablokować reszty
                 print(f"Consolidation refresh failed: {exc}")
+            try:
+                self.logins_view.set_data(db.load_login_numbers(), self.model.all_employees)
+            except Exception as exc:
+                print(f"Logins refresh failed: {exc}")
             self.restore_selection(selected_ids)
             self.table.verticalScrollBar().setValue(scroll_value)
             self._refresh_shifts()
@@ -726,6 +743,7 @@ class MainWindow(QMainWindow):
         self._update_page_header(self.stack.currentIndex())
         self.monitoring_view.refresh_theme()
         self.consolidation_view.refresh_theme()
+        self.logins_view.refresh_theme()
 
     def show_view(self, index):
         self.stack.setCurrentIndex(index)
@@ -775,20 +793,47 @@ class MainWindow(QMainWindow):
                          refresh_after=True)
 
     def import_logins(self):
+        """Plik Inlognamen: najpierw podgląd (co nowe, co pominięte), zapis dopiero po OK."""
         filepath, _ = QFileDialog.getOpenFileName(
-            self, "Open login list", "", "Excel files (*.xlsx *.xlsm)"
+            self, "Open login list (Inlognamen)", "", "Excel files (*.xlsx *.xlsm)"
         )
         if not filepath:
             return
 
-        def done(result):
-            count, matched, total = result
-            QMessageBox.information(
-                self, "Success",
-                f"Logins loaded: {count}\nEmployees on the list with a login: {matched} of {total}",
+        def preview(rows):
+            dialog = LoginImportDialog(rows, self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            self.run_db_task(
+                lambda: db.apply_logins_import(rows, filepath),
+                on_finished=lambda count: self.statusBar().showMessage(f"Logins: {count} new imported", 8000),
+                refresh_after=True,
             )
 
-        self.run_db_task(lambda: db.import_logins_from_excel(filepath), on_finished=done, refresh_after=True)
+        self.run_db_task(lambda: db.preview_logins_import(filepath), on_finished=preview)
+
+    def _login_task(self, task):
+        """Zmiana w zakładce Loginy; ostrzeżenia (np. stary login zwolniony) w okienku."""
+        def done(warnings):
+            if warnings:
+                QMessageBox.information(self, "Logins", "\n".join(warnings))
+
+        self.run_db_task(task, on_finished=done, refresh_after=True)
+
+    def assign_login(self, number, name, same_person=False):
+        self._login_task(lambda: db.assign_login(number, name, same_person))
+
+    def add_login_for(self, emp):
+        """Monitoring → „Add login…": ta sama osoba ze spisu (inna pisownia) albo nowy, wolny numer."""
+        rows = db.load_login_numbers()
+        free = [r["number"] for r in rows if db.login_status(r) == "free"]
+        person = f"{emp.firstname} {emp.lastname}".strip()
+        dialog = LoginForPersonDialog(person, free, similar_logins(rows, emp.firstname, emp.lastname), self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        number, same = dialog.value()
+        if number:
+            self.assign_login(number, person, same)
 
     def move_employees(self, employee_ids, department, position, from_position="", add=False):
         """Kostka upuszczona w widoku Monitoring: zapis od razu, z aktualną godziną."""
@@ -857,6 +902,8 @@ class MainWindow(QMainWindow):
         elif action == "back":
             self.run_db_task(self._guarded(employee_ids, lambda: db.back_to_work_in_db(employee_ids)),
                              on_finished=self._show_errors, refresh_after=True)
+        elif action == "login":
+            self.add_login_for(people[0])
         elif action == "zones":
             dialog = ZonePickerDialog(people[0], self)
             if dialog.exec() == QDialog.Accepted:

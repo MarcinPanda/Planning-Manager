@@ -172,6 +172,15 @@ QStatusBar {{ background-color: {p['surface']}; color: {p['muted']}; border-top:
 #topbar {{ background-color: {p['surface']}; border-bottom: 1px solid {p['border']}; }}
 #topbar QLabel#pageTitle {{ font-size: 17pt; font-weight: 700; }}
 QLabel#muted, QLabel#hint {{ color: {p['muted']}; }}
+QWidget#rowActions {{ background: transparent; }}
+QRadioButton::indicator {{ width: 12px; height: 12px; border-radius: 8px; border: 2px solid {p['muted']};
+    background: {p['surface']}; }}
+QRadioButton::indicator:hover {{ border-color: {p['accent']}; }}
+QRadioButton::indicator:checked {{ border-color: {p['accent']}; background: qradialgradient(cx:0.5, cy:0.5,
+    radius:0.5, fx:0.5, fy:0.5, stop:0 {p['accent']}, stop:0.5 {p['accent']}, stop:0.6 {p['surface']},
+    stop:1 {p['surface']}); }}
+QRadioButton::indicator:disabled {{ border-color: {p['border']}; }}
+QPushButton#rowButton, QToolButton#rowButton {{ padding: 2px 10px; border-radius: 6px; }}
 QLabel#kpi {{ background-color: {p['surface2']}; border: 1px solid {p['border']}; border-radius: 7px;
               padding: 4px 10px; }}
 

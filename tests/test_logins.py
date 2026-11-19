@@ -96,3 +96,40 @@ def test_old_logins_table_is_moved_once(temp_db):
     conn = db.get_connection()
     assert conn.execute("SELECT COUNT(*) FROM change_log WHERE action = 'Logins moved'").fetchone()[0] == 1
     conn.close()
+
+
+@pytest.fixture
+def app():
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])
+
+
+def test_logins_view_filters_and_counts(app, temp_db):
+    from pm.logins_view import COL, LoginsView
+    make_employee(lastname="Dijk", firstname="Jan van")
+    db.assign_login("012", "Jan van Dijk")
+    db.set_login_state("020", "damaged", "cable")
+    view = LoginsView()
+    view.set_data(db.load_login_numbers(), db.load_employees_from_db())
+    assert view.counts() == {"all": 299, "free": 297, "assigned": 1, "damaged": 1, "blocked": 0}
+    view.filter_buttons["assigned"].setChecked(True)
+    assert view.shown_numbers() == ["012"]
+    assert view.table.item(0, COL["Today"]).text() == "✓"
+    view.filter_buttons["all"].setChecked(True)
+    view.search.setText("cable")
+    assert view.shown_numbers() == ["020"]
+    assert "020" not in view.free_numbers() and "012" not in view.free_numbers()
+
+
+def test_add_login_dialog_offers_same_person(app, temp_db):
+    from pm.logins_view import LoginForPersonDialog, similar_logins
+    db.assign_login("180", "AHMAD-NICOLAE KHALAF")
+    db.assign_login("181", "Piet Jansen")
+    rows = db.load_login_numbers()
+    similar = similar_logins(rows, "Ahmad", "Khalaf")
+    assert [r["number"] for r in similar] == ["180"]
+
+    dialog = LoginForPersonDialog("Ahmad Khalaf", ["001", "002"], similar)
+    assert dialog.value() == ("001", False)          # domyślnie nowy, najniższy wolny numer
+    dialog.choices[0][0].setChecked(True)
+    assert dialog.value() == ("180", True)

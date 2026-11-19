@@ -100,7 +100,12 @@ nazwy na komputerze z własnym ułożeniem trafia na koniec kolumny (wystarczy j
    - **ułożenie zapamiętane dla każdego użytkownika osobno** + przycisk „Reset to default".
 3. Opcjonalnie: ukrywanie pustych klocków (np. „pokaż tylko działy z ludźmi") – przełącznik.
 
-## Etap 5 – zakładka Loginy
+## Etap 5 – zakładka Loginy ✅ (zrobione 19.11 – do sprawdzenia w pracy)
+
+Zrobione: tabela `login_numbers` (001–299, stan, uwagi, kto/kiedy), jednorazowe przeniesienie starej tabeli
+`logins`, zakładka Logins (filtry z licznikami, szukanie, przyciski w wierszu), Monitoring → *Add login…* z opcją
+„Same person" (inna pisownia), import Inlognamen z podglądem (bez Z…P, numery spoza zakresu i powtórki pominięte).
+Punkt 6 (Tools Registration) – później.
 
 1. **Widok Loginy** (4. pozycja w menu): tabela loginów N…P / R…R (bez Z…P i zdublowanych numerów):
    numer, kody (N012P, R012R), osoba, status, uwagi, data zmiany.
