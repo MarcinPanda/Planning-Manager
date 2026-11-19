@@ -79,9 +79,8 @@ def _migrate(cursor):
             name = _shift_name([r[0] for r in orphans])
             shift_id = _ensure_shift(cursor, date.today().isoformat(), name)
             cursor.execute("UPDATE employees SET shift_id = ? WHERE shift_id IS NULL", (shift_id,))
-    if version < 3:
-        _migrate_logins(cursor)
-    cursor.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    # nigdy w dół (starsze exe w tym samym folderze ustawiają 2)
+    cursor.execute(f"PRAGMA user_version = {max(version, SCHEMA_VERSION)}")
 
 
 def _create_change_tracking(cursor):
@@ -1831,6 +1830,12 @@ def _create_login_numbers(cursor):
     """)
     cursor.executemany("INSERT OR IGNORE INTO login_numbers (number) VALUES (?)",
                        [(f"{n:03d}",) for n in range(config.LOGIN_FIRST, config.LOGIN_LAST + 1)])
+    # Przeniesienie starej listy tylko raz – znacznik w meta, bo starsze exe obniżają user_version
+    # i ponowne przeniesienie cofnęłoby zwolnienia i poprawki pisowni.
+    cursor.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)")
+    if not cursor.execute("SELECT 1 FROM meta WHERE key = 'logins_migrated'").fetchone():
+        _migrate_logins(cursor)
+        cursor.execute("INSERT INTO meta (key, value) VALUES ('logins_migrated', 1)")
 
 
 def _migrate_logins(cursor):
@@ -1874,13 +1879,15 @@ def _assigned_logins(cursor):
 
 def _import_problem(cursor, number, key):
     """Dlaczego nie można przypisać numeru osobie z pliku ('' = można, 'same' = już ma)."""
-    row = cursor.execute("SELECT name, name_key FROM login_numbers WHERE number = ?", (number,)).fetchone()
+    row = cursor.execute("SELECT name, name_key, state FROM login_numbers WHERE number = ?", (number,)).fetchone()
     if row is None:
         return f"outside {config.LOGIN_FIRST:03d}–{config.LOGIN_LAST:03d}"
     if row[1] == key:
         return "same"
     if row[1]:
         return f"taken by {row[0]}"
+    if row[2] != "ok":
+        return f"login is {row[2]}"
     other = cursor.execute("SELECT number FROM login_numbers WHERE name_key = ?", (key,)).fetchone()
     if other:
         return f"person already has {other[0]}"

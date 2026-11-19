@@ -89,6 +89,9 @@ class ReacherDialog(QDialog):
         layout.addWidget(self.list)
 
         by_token = {employee_token(e): e for e in employees}
+        # RIT zapisany przed nadaniem loginu ma „id:17" – pokazujemy go jako tę osobę (z loginem)
+        id_to_token = {f"id:{e.employee_id}": employee_token(e) for e in employees}
+        current_tokens = list(dict.fromkeys(id_to_token.get(t, t) for t in current_tokens))
         reach = [e for e in employees
                  if e.active_department == CONSOLIDATION_DEPARTMENT and e.status not in ("sick", "home")]
         reach.sort(key=lambda e: (e.lastname.lower(), e.firstname.lower()))

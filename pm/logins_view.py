@@ -112,18 +112,19 @@ class LoginForPersonDialog(QDialog):
         new_row.addWidget(self.number_combo, 1)
         layout.addLayout(new_row)
         self.choices.append((self.new_radio, None, False))
-        self.new_radio.setChecked(True)
         if not free_numbers:
             self.new_radio.setEnabled(False)
-            self.number_combo.setEnabled(False)
-            if similar:
-                self.choices[0][0].setChecked(True)
+        if not similar:
+            self.new_radio.setChecked(True)     # z podobnym nazwiskiem w spisie – wybór świadomie, bez domyślnego
+        self.number_combo.setEnabled(self.new_radio.isChecked())
         self.new_radio.toggled.connect(self.number_combo.setEnabled)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        buttons.button(QDialogButtonBox.Ok).setEnabled(bool(free_numbers or similar))
+        self.ok_button = buttons.button(QDialogButtonBox.Ok)
+        self.ok_button.setEnabled(self.group.checkedButton() is not None)
+        self.group.buttonToggled.connect(lambda *_: self.ok_button.setEnabled(self.group.checkedButton() is not None))
         layout.addWidget(buttons)
 
     def value(self):

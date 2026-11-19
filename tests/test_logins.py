@@ -85,6 +85,7 @@ def test_old_logins_table_is_moved_once(temp_db):
                      [(db.name_key("Jan van Dijk"), "Jan van Dijk", "007"),
                       (db.name_key("Ewa Nowak"), "Ewa Nowak", "007")])   # ten sam numer dwa razy
     conn.execute("UPDATE login_numbers SET name = '', name_key = ''")
+    conn.execute("DELETE FROM meta WHERE key = 'logins_migrated'")   # baza sprzed Etapu 5
     conn.execute("PRAGMA user_version = 2")
     conn.commit()
     conn.close()
@@ -130,6 +131,39 @@ def test_add_login_dialog_offers_same_person(app, temp_db):
     assert [r["number"] for r in similar] == ["180"]
 
     dialog = LoginForPersonDialog("Ahmad Khalaf", ["001", "002"], similar)
-    assert dialog.value() == ("001", False)          # domyślnie nowy, najniższy wolny numer
+    assert dialog.value() == (None, False) and not dialog.ok_button.isEnabled()   # podobne nazwisko: wybór świadomy
     dialog.choices[0][0].setChecked(True)
-    assert dialog.value() == ("180", True)
+    assert dialog.value() == ("180", True) and dialog.ok_button.isEnabled()
+    dialog.new_radio.setChecked(True)
+    assert dialog.value() == ("001", False)          # najniższy wolny numer
+
+    plain = LoginForPersonDialog("Ewa Nowak", ["001"], [])
+    assert plain.value() == ("001", False) and plain.ok_button.isEnabled()
+
+
+def test_older_exe_does_not_rerun_login_move(temp_db):
+    """Starsze exe w tym samym folderze ustawiają user_version = 2 – zwolnienia i poprawki pisowni zostają."""
+    conn = db.get_connection()
+    conn.executemany("INSERT INTO logins (name_key, name, login) VALUES (?, ?, ?)",
+                     [(db.name_key("Jan van Dijk"), "Jan van Dijk", "007"),
+                      (db.name_key("MARKUS AUKSTARS"), "MARKUS AUKSTARS", "030")])
+    conn.commit()
+    conn.close()
+    db.release_login("007")
+    db.assign_login("030", "Markuss Aukstars", same_person=True)
+    conn = db.get_connection()
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+
+    db.init_db()
+    assert db.schema_version() == db.SCHEMA_VERSION
+    assert _row("007")["name"] == "" and _row("030")["name"] == "Markuss Aukstars" and _row("030")["note"] == ""
+
+
+def test_import_skips_damaged_number(temp_db):
+    db.set_login_state("008", "damaged", "cable")
+    path = str(temp_db / "inlognamen.xlsx")
+    pd.DataFrame([["Nummer-1", "Naam"], ["8", "Ewa Nowak"]]).to_excel(path, header=False, index=False)
+    preview = db.preview_logins_import(path)
+    assert preview[0]["action"] == "skip" and "damaged" in preview[0]["detail"]
