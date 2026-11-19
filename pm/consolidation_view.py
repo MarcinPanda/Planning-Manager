@@ -3,14 +3,15 @@
 Widok niczego sam nie zapisuje – wysyła sygnały, a główne okno zapisuje w bazie.
 Przypisanie reachera do RIT-u (bez „V") daje mu na Monitoringu strefę Kantel/Consolidatie.
 """
-from datetime import date
+from datetime import date, timedelta
 
-from PySide6.QtCore import QSize, QTime, Qt, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import QDate, QSize, QTime, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDateEdit,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -36,7 +37,7 @@ from .config import CONSOLIDATION_DEPARTMENT, CONSOLIDATION_WORK_DEPARTMENT
 from .db import consolidation_zones, employee_token
 from .excel_io import parse_reachers
 
-COLUMNS = ["Time", "RIT", "Area", "Amount", "Kantel", "Consol.", "Reacher", "V", "Done", "Lane", "Comment",
+COLUMNS = ["Date", "Time", "RIT", "Area", "Amount", "Kantel", "Consol.", "Reacher", "V", "Done", "Lane", "Comment",
            "Who was busy"]
 COL = {name: i for i, name in enumerate(COLUMNS)}
 EDITABLE_TEXT = {"Time": "time", "Area": "area", "Amount": "amount", "Kantel": "kantel", "Lane": "lane",
@@ -212,12 +213,30 @@ class BusyPopup(QDialog):
         return ", ".join(names)
 
 
+def date_label(datum):
+    """'2026-11-19' -> 'Thu 19-11' (dzisiaj: 'Today 19-11')."""
+    try:
+        day = date.fromisoformat(datum)
+    except ValueError:
+        return datum
+    if day == date.today():
+        prefix = "Today"
+    elif day == date.today() - timedelta(days=1):
+        prefix = "Yesterday"
+    else:
+        prefix = day.strftime("%a")
+    return f"{prefix} {day:%d-%m}"
+
+
 class AddRitDialog(QDialog):
     def __init__(self, datum, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"Add RIT – {datum}")
+        self.setWindowTitle("Add RIT")
 
         form = QFormLayout(self)
+        self.date_edit = QDateEdit(QDate.fromString(datum, "yyyy-MM-dd"))
+        self.date_edit.setDisplayFormat("ddd dd-MM-yyyy")
+        self.date_edit.setCalendarPopup(True)
         self.rit_edit = QLineEdit()
         self.area_combo = QComboBox()
         self.area_combo.addItems(["noord", "zuid"])
@@ -230,6 +249,7 @@ class AddRitDialog(QDialog):
         self.kantel_spin.setRange(0, 999)
         self.comment_edit = QLineEdit()
 
+        form.addRow("Date:", self.date_edit)
         form.addRow("RIT:", self.rit_edit)
         form.addRow("Area:", self.area_combo)
         form.addRow("Time:", self.time_edit)
@@ -283,11 +303,7 @@ class ConsolidationView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         bar = QHBoxLayout()
-        bar.addWidget(QLabel("Date:"))
-        self.date_combo = QComboBox()
-        self.date_combo.setMinimumWidth(130)
-        self.date_combo.currentIndexChanged.connect(lambda _: self._rebuild())
-        bar.addWidget(self.date_combo)
+        self._scrolled_to_today = False
 
         # Jak filtr w oryginalnym pliku: RIT z „X" w Done (konsolidacja zrobiona) znika z listy roboczej
         self.hide_finished = QCheckBox("Hide done (X)")
@@ -335,7 +351,7 @@ class ConsolidationView(QWidget):
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
-        for name, width in (("Time", 60), ("RIT", 80), ("Area", 60), ("Amount", 65), ("Kantel", 60),
+        for name, width in (("Date", 105), ("Time", 60), ("RIT", 80), ("Area", 60), ("Amount", 65), ("Kantel", 60),
                             ("Consol.", 60), ("Reacher", 330), ("V", 40), ("Done", 50), ("Lane", 70),
                             ("Comment", 220)):
             self.table.setColumnWidth(COL[name], width)
@@ -354,7 +370,8 @@ class ConsolidationView(QWidget):
         return self.dialog_open or self.table.state() == QAbstractItemView.EditingState
 
     def current_date(self):
-        return self.date_combo.currentData() or date.today().isoformat()
+        """Data dla nowego RIT-u: dzisiaj (w okienku Add RIT można zmienić)."""
+        return date.today().isoformat()
 
     def set_data(self, rows, employees, login_names, force=False):
         signature = (
@@ -371,32 +388,29 @@ class ConsolidationView(QWidget):
         self.rows = rows
         self.employees = employees
         self.login_names = login_names
-        self._fill_dates()
         self._rebuild()
+        if not self._scrolled_to_today:      # przy pierwszym pokazaniu: od dzisiejszych RIT-ów
+            self.scroll_to_today()
 
-    def _fill_dates(self):
+    def scroll_to_today(self):
         today = date.today().isoformat()
-        dates = sorted({r["datum"] for r in self.rows} | {today})
-        current = self.date_combo.currentData() or today
-        self.date_combo.blockSignals(True)
-        self.date_combo.clear()
-        for d in dates:
-            self.date_combo.addItem(f"{d}  (today)" if d == today else d, d)
-        self.date_combo.setCurrentIndex(max(0, dates.index(current) if current in dates else dates.index(today)))
-        self.date_combo.blockSignals(False)
+        index = next((i for i, r in enumerate(self.shown_rows) if r["datum"] >= today), None)
+        if index is not None:
+            self._scrolled_to_today = True
+            self.table.scrollToItem(self.table.item(index, COL["Date"]), QAbstractItemView.PositionAtTop)
 
     def _rebuild(self):
-        datum = self.current_date()
-        rows = [r for r in self.rows if r["datum"] == datum]
-        total_amount = sum(r["amount"] for r in rows)
-        total_kantel = sum(r["kantel"] for r in rows)
+        # wszystkie RIT-y jeden pod drugim (dzień w kolumnie Date), nie po jednym dniu
+        rows = sorted(self.rows, key=lambda r: (r["datum"], r["time"], r["rit"], r["seq"]))
+        today_rows = [r for r in rows if r["datum"] == date.today().isoformat()]
+        total_amount = sum(r["amount"] for r in today_rows)
+        total_kantel = sum(r["kantel"] for r in today_rows)
         open_count = sum(1 for r in rows if not r["v"])
-        done_count = sum(1 for r in rows if r["done"])
         unassigned = sum(1 for r in rows if not r["v"] and not r["reachers"])
         self.summary_label.setText(
-            f"RITs: {len(rows)}  ·  to drive (no V): {open_count}  ·  without reacher: {unassigned}  ·  "
-            f"done: {done_count}  ·  pallets: {total_amount} (Kantel {total_kantel}, "
-            f"Consolidatie {total_amount - total_kantel})"
+            f"To drive (no V): {open_count}  ·  without reacher: {unassigned}   |   "
+            f"today: {len(today_rows)} RITs, done {sum(1 for r in today_rows if r['done'])}, "
+            f"pallets {total_amount} (Kantel {total_kantel}, Consolidatie {total_amount - total_kantel})"
         )
         if self.hide_finished.isChecked():
             rows = [r for r in rows if not r["done"]]
@@ -412,7 +426,7 @@ class ConsolidationView(QWidget):
         for row_index, r in enumerate(rows):
             reacher_text = ", ".join(token_label(t, by_token, self.login_names) for t in r["reachers"])
             values = {
-                "Time": r["time"], "RIT": r["rit"] + (f" ({r['seq']})" if r["seq"] > 1 else ""),
+                "Date": date_label(r["datum"]), "Time": r["time"], "RIT": r["rit"] + (f" ({r['seq']})" if r["seq"] > 1 else ""),
                 "Area": r["area"], "Amount": str(r["amount"]), "Kantel": str(r["kantel"]),
                 "Consol.": str(r["amount"] - r["kantel"]),
                 "Reacher": reacher_text or (r["reacher_text"] and f"? {r['reacher_text']}") or "+ assign",
@@ -437,8 +451,14 @@ class ConsolidationView(QWidget):
                     flags |= Qt.ItemIsUserCheckable
                     item.setCheckState(Qt.Checked if r["v" if name == "V" else "done"] else Qt.Unchecked)
                 item.setFlags(flags)
-                if name in ("Amount", "Kantel", "Consol.", "Time"):
+                if name in ("Amount", "Kantel", "Consol.", "Time", "Date"):
                     item.setTextAlignment(Qt.AlignCenter)
+                if name == "Date":
+                    item.setToolTip(r["datum"])
+                    if r["datum"] == date.today().isoformat():
+                        font = QFont(item.font())
+                        font.setBold(True)
+                        item.setFont(font)
                 if name == "Who was busy":
                     item.setToolTip(f"Click to pick who did it (people on {CONSOLIDATION_WORK_DEPARTMENT})")
                     if not r["busy"]:
@@ -531,7 +551,7 @@ class ConsolidationView(QWidget):
         finally:
             self.dialog_open = False
         if accepted:
-            self.add_requested.emit(self.current_date(), dialog.values())
+            self.add_requested.emit(dialog.date_edit.date().toString("yyyy-MM-dd"), dialog.values())
 
     def selected_ids(self):
         rows = sorted({index.row() for index in self.table.selectionModel().selectedRows()})

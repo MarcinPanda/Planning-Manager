@@ -170,7 +170,7 @@ def test_consolidation_view(app, temp_db):
     assert view.table.rowCount() == 1
     assert view.table.item(0, COL["Reacher"]).text() == "Ron Reach [052]"
     assert view.table.item(0, COL["Consol."]).text() == "5"
-    assert "to drive (no V): 1" in view.summary_label.text()
+    assert "To drive (no V): 1" in view.summary_label.text()
 
     received = []
     view.update_requested.connect(lambda *args: received.append(args))
@@ -233,3 +233,19 @@ def test_done_rows_hidden_by_default(app, temp_db):
     assert [r["id"] for r in view.shown_rows] == [open_rit]
     view.hide_finished.setChecked(False)
     assert view.table.rowCount() == 2
+
+
+def test_consolidation_view_shows_all_days(app, temp_db):
+    """Wszystkie RIT-y jeden pod drugim (dzień w kolumnie Date), nie po jednym dniu."""
+    from datetime import date, timedelta
+    from pm.consolidation_view import date_label
+    today = date.today()
+    yesterday, tomorrow = (today - timedelta(days=1)).isoformat(), (today + timedelta(days=1)).isoformat()
+    db.add_consolidation_in_db(tomorrow, "3", time="08:00")
+    db.add_consolidation_in_db(today.isoformat(), "2", time="09:00")
+    db.add_consolidation_in_db(yesterday, "1", time="23:00")
+    view = ConsolidationView()
+    view.set_data(db.load_consolidation(), [], {})
+    assert [view.table.item(r, COL["RIT"]).text() for r in range(view.table.rowCount())] == ["1", "2", "3"]
+    assert view.table.item(1, COL["Date"]).text() == date_label(today.isoformat()) == f"Today {today:%d-%m}"
+    assert view.table.item(0, COL["Date"]).text().startswith("Yesterday")
