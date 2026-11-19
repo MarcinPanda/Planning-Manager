@@ -235,7 +235,7 @@ def read_logins_excel(filepath):
     """Czyta spis loginów i zwraca listę (nazwisko, login '012').
 
     Obsługuje oba układy:
-    - plik z kodami (kolumny Naam / Noord 'N012P' / Zuid 'Z012P' / Reach 'R012R'),
+    - plik z kodami (kolumny Naam / Noord 'N012P' / Reach 'R012R'; Zuid 'Z…P' pomijamy – nieużywane),
     - plik z kolumnami 'Login:' i 'Name:' (np. zakładka Logins).
     """
     # Bez pandas: openpyxl w trybie tylko do odczytu jest wielokrotnie szybszy przy pierwszym użyciu.
@@ -260,7 +260,7 @@ def read_logins_excel(filepath):
             if name_col is None:
                 continue
 
-            code_cols = [i for i, c in enumerate(cells) if c in ("noord", "zuid", "reach")]
+            code_cols = [i for i, c in enumerate(cells) if c in ("noord", "reach")]
             login_cols = [i for i, c in enumerate(cells) if c in ("login", "nummer", "nummer-1", "nr")]
             if not code_cols and not login_cols:
                 continue

@@ -25,10 +25,7 @@ def _emp(emp_id):
 
 
 def _add_login(name, login):
-    conn = db.get_connection()
-    conn.execute("INSERT INTO logins (name_key, name, login) VALUES (?, ?, ?)", (db.name_key(name), name, login))
-    conn.commit()
-    conn.close()
+    db.assign_login(login, name)
 
 
 def test_parse_reachers():

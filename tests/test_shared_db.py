@@ -38,7 +38,7 @@ def test_old_database_is_migrated_with_backup(tmp_path, monkeypatch):
 
     db.init_db()
     assert db.schema_version() == db.SCHEMA_VERSION
-    assert glob.glob(os.path.join(config.BACKUP_DIR, "before_schema_v2_*.db"))   # kopia przed zmianą
+    assert glob.glob(os.path.join(config.BACKUP_DIR, f"before_schema_v{db.SCHEMA_VERSION}_*.db"))   # kopia przed zmianą
     emp = db.load_employees_from_db()
     assert [e.lastname for e in emp] == ["Old"]
     assert db.resolved_shift()[2] == "Middag"

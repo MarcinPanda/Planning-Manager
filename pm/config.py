@@ -45,6 +45,10 @@ def use_database_folder(folder):
 
 
 DB_FOLDER = DB_PATH = BACKUP_DIR = ARCHIVE_DIR = ""
+
+# Loginy: numery 001–299, kody N…P (picking) i R…R (reach). Z…P nieużywane (ustalone 18.11).
+LOGIN_FIRST, LOGIN_LAST = 1, 299
+LOGIN_STATES = ("ok", "damaged", "blocked")
 use_database_folder(read_database_folder())
 REFRESH_CHECK_MS = 3_000   # co tyle sprawdzamy, czy ktoś inny coś zmienił
 SYNC_INTERVAL_MS = 10_000  # auto-odświeżanie tabeli

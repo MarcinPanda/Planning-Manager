@@ -30,7 +30,7 @@ EMP_COLS = (
     "computed_hours, marked, info, custom_breaks, late, position, planned_hours, shift_id"
 )
 
-SCHEMA_VERSION = 2   # 2 = zmiany (shifts), licznik zmian, praca kilku komputerów na jednej bazie
+SCHEMA_VERSION = 3   # 2 = zmiany (shifts), licznik zmian, kilka komputerów; 3 = loginy po numerach
 
 try:
     USER = getpass.getuser()
@@ -79,6 +79,8 @@ def _migrate(cursor):
             name = _shift_name([r[0] for r in orphans])
             shift_id = _ensure_shift(cursor, date.today().isoformat(), name)
             cursor.execute("UPDATE employees SET shift_id = ? WHERE shift_id IS NULL", (shift_id,))
+    if version < 3:
+        _migrate_logins(cursor)
     cursor.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -88,7 +90,7 @@ def _create_change_tracking(cursor):
     cursor.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0)")
     cursor.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('changes', 0)")
     for table in ("employees", "departments", "consolidation", "logins", "shifts", "zones", "extra_departments",
-                  "hidden_departments"):
+                  "hidden_departments", "login_numbers"):
         for event in ("INSERT", "UPDATE", "DELETE"):
             cursor.execute(f"""
                 CREATE TRIGGER IF NOT EXISTS trg_{table}_{event.lower()} AFTER {event} ON {table}
@@ -296,6 +298,7 @@ def init_db():
             if merged != value:
                 cursor.execute(f"UPDATE {table} SET {column} = ? WHERE {key} = ?", (merged, row_id))
 
+    _create_login_numbers(cursor)
     _migrate(cursor)
     _create_zones(cursor)
     # te same zmiany nazw w tabeli stref (np. „Mars GUM" -> „Mars Gum"), gdy nowej nazwy jeszcze nie ma
@@ -887,7 +890,7 @@ def _load_employees(cursor, shift_ids=None):
     rows = cursor.execute(f"SELECT {EMP_COLS} FROM employees WHERE shift_id IN ({marks})", shift_ids).fetchall()
     result = [_employee_from_row(cursor, row) for row in rows]
 
-    logins = dict(cursor.execute("SELECT name_key, login FROM logins").fetchall())
+    logins = _assigned_logins(cursor)
     if logins:
         for emp in result:
             emp.login = find_login(name_key(emp.firstname, emp.lastname), logins)
@@ -1564,32 +1567,20 @@ def toggle_position_in_db(emp_id, position):
 
 
 def import_logins_from_excel(filepath):
-    """Wczytuje spis loginów. Zwraca (liczba loginów, ilu obecnych pracowników dopasowano)."""
-    pairs = read_logins_excel(filepath)
-
+    """Wczytuje plik loginów bez podglądu (przypisuje tylko wolne numery). Zwraca
+    (liczba loginów w pliku, ilu obecnych pracowników ma login, ilu jest pracowników)."""
+    rows = preview_logins_import(filepath)
+    apply_logins_import(rows, filepath)
     conn = get_connection()
-    cursor = conn.cursor()
     try:
-        for name, login in pairs:
-            cursor.execute(
-                "INSERT OR REPLACE INTO logins (name_key, name, login) VALUES (?, ?, ?)",
-                (name_key(name), name, login),
-            )
-
-        known = dict(cursor.execute("SELECT name_key, login FROM logins").fetchall())
+        cursor = conn.cursor()
+        known = _assigned_logins(cursor)
         people = cursor.execute("SELECT firstname, lastname FROM employees WHERE shift_id = ?",
                                 (_resolve_shift(cursor),)).fetchall()
         matched = sum(1 for first, last in people if find_login(name_key(first, last), known))
-
-        _record(cursor, "Import logins", f"{len(pairs)} logins, {matched} of {len(people)} employees matched")
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
     finally:
         conn.close()
-
-    return len(pairs), matched, len(people)
+    return len(rows), matched, len(people)
 
 
 def mark_employees_late_in_db(items):
@@ -1825,13 +1816,250 @@ def consolidation_dates():
         conn.close()
 
 
+def _create_login_numbers(cursor):
+    """Jeden wiersz na numer loginu (001–299): osoba, stan (ok / damaged / blocked), uwagi, kto i kiedy zmienił."""
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS login_numbers (
+            number TEXT PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            name_key TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL DEFAULT 'ok',
+            note TEXT NOT NULL DEFAULT '',
+            changed TEXT NOT NULL DEFAULT '',
+            changed_by TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    cursor.executemany("INSERT OR IGNORE INTO login_numbers (number) VALUES (?)",
+                       [(f"{n:03d}",) for n in range(config.LOGIN_FIRST, config.LOGIN_LAST + 1)])
+
+
+def _migrate_logins(cursor):
+    """Jednorazowo: dotychczasowe loginy (tabela logins, po nazwisku) -> numery. Stara tabela zostaje.
+    Konflikty (numer zajęty, osoba z dwoma numerami, numer spoza zakresu) idą do uwag i dziennika."""
+    rows = cursor.execute("SELECT name, name_key, login FROM logins ORDER BY name").fetchall()
+    if not rows:
+        return
+    moved, problems = 0, []
+    for name, key, number in rows:
+        problem = _import_problem(cursor, number, key)
+        if problem == "same":
+            continue
+        if problem:
+            problems.append(f"{number} {name}: {problem}")
+            if problem.startswith("taken"):
+                cursor.execute("UPDATE login_numbers SET note = TRIM(note || ' / also in old list: ' || ?) "
+                               "WHERE number = ?", (name, number))
+            continue
+        _write_login(cursor, number, name=name, name_key=key)
+        moved += 1
+    _record(cursor, "Logins moved", f"{moved} logins moved to numbers 001–299"
+            + (f"; not moved: {'; '.join(problems)}" if problems else ""))
+
+
+def _now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def _write_login(cursor, number, **fields):
+    fields.update(changed=_now(), changed_by=USER)
+    cursor.execute(f"UPDATE login_numbers SET {', '.join(f'{k} = ?' for k in fields)} WHERE number = ?",
+                   (*fields.values(), number))
+
+
+def _assigned_logins(cursor):
+    """name_key -> numer, dla przypisanych loginów."""
+    return dict(cursor.execute("SELECT name_key, number FROM login_numbers WHERE name_key != ''").fetchall())
+
+
+def _import_problem(cursor, number, key):
+    """Dlaczego nie można przypisać numeru osobie z pliku ('' = można, 'same' = już ma)."""
+    row = cursor.execute("SELECT name, name_key FROM login_numbers WHERE number = ?", (number,)).fetchone()
+    if row is None:
+        return f"outside {config.LOGIN_FIRST:03d}–{config.LOGIN_LAST:03d}"
+    if row[1] == key:
+        return "same"
+    if row[1]:
+        return f"taken by {row[0]}"
+    other = cursor.execute("SELECT number FROM login_numbers WHERE name_key = ?", (key,)).fetchone()
+    if other:
+        return f"person already has {other[0]}"
+    return ""
+
+
+def login_status(row):
+    """free / assigned / damaged / blocked – to, co widać w zakładce Loginy."""
+    if row["state"] in ("damaged", "blocked"):
+        return row["state"]
+    return "assigned" if row["name_key"] else "free"
+
+
+def load_login_numbers():
+    conn = get_connection()
+    try:
+        cols = ("number", "name", "name_key", "state", "note", "changed", "changed_by")
+        rows = conn.execute(f"SELECT {', '.join(cols)} FROM login_numbers ORDER BY number").fetchall()
+        return [dict(zip(cols, row)) for row in rows]
+    finally:
+        conn.close()
+
+
+def _open_rits(cursor, number):
+    """Ile niezamkniętych RIT-ów ma tego reachera (login) – po zwolnieniu numeru zostałyby bez osoby."""
+    rows = cursor.execute("SELECT reachers FROM consolidation WHERE done = 0 AND reachers != ''").fetchall()
+    return sum(1 for (value,) in rows if number in split_positions(value))
+
+
+def assign_login(number, name, same_person=False):
+    """Daje numer osobie (name = „Imię Nazwisko" jak w planie). Osoba z innym numerem dostaje ten nowy,
+    a stary jest zwalniany. same_person=True: numer należy już do tej osoby pod inną pisownią – tylko
+    poprawiamy nazwisko na takie jak w planie. Zwraca listę ostrzeżeń; błędy jako ValueError."""
+    key = name_key(name)
+    if not key:
+        raise ValueError("Enter a name.")
+    conn = get_connection()
+    cursor = conn.cursor()
+    warnings_ = []
+    try:
+        row = cursor.execute("SELECT name, name_key, state FROM login_numbers WHERE number = ?",
+                             (number,)).fetchone()
+        if row is None:
+            raise ValueError(f"Login {number} does not exist.")
+        old_name, old_key, state = row
+        if old_key == key:
+            return []
+        if old_key and not same_person:
+            raise ValueError(f"Login {number} is already given to {old_name}.")
+        if state != "ok" and not same_person:
+            raise ValueError(f"Login {number} is {state} – set it to OK first.")
+        for (previous,) in cursor.execute("SELECT number FROM login_numbers WHERE name_key = ? AND number != ?",
+                                          (key, number)).fetchall():
+            _write_login(cursor, previous, name="", name_key="")
+            warnings_.append(f"{name} had login {previous} – it is free now.")
+            if _open_rits(cursor, previous):
+                warnings_.append(f"Login {previous} is still a reacher on open RITs – check Consolidatie.")
+        cursor.execute(
+            "UPDATE login_numbers SET name = ?, name_key = ?, changed = ?, changed_by = ? "
+            "WHERE number = ? AND name_key = ?", (name, key, _now(), USER, number, old_key))
+        if cursor.rowcount != 1:   # ktoś inny w tej chwili dał ten numer komuś
+            raise ValueError(f"Login {number} was just changed on another computer – try again.")
+        what = f"{number}: {old_name} -> {name} (same person)" if same_person else f"{number} -> {name}"
+        _record(cursor, "Login", what)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return warnings_
+
+
+def release_login(number):
+    """Zwalnia numer (osoba odchodzi / zmiana loginu). Zwraca ostrzeżenia."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        row = cursor.execute("SELECT name FROM login_numbers WHERE number = ?", (number,)).fetchone()
+        if row is None or not row[0]:
+            return []
+        _write_login(cursor, number, name="", name_key="")
+        _record(cursor, "Login", f"{number} released ({row[0]})")
+        warnings_ = []
+        if _open_rits(cursor, number):
+            warnings_.append(f"Login {number} is still a reacher on open RITs – check Consolidatie.")
+        conn.commit()
+        return warnings_
+    finally:
+        conn.close()
+
+
+def set_login_state(number, state, note=None):
+    """ok / damaged / blocked (+ powód w uwagach)."""
+    if state not in config.LOGIN_STATES:
+        raise ValueError(f"Unknown state: {state}")
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        fields = {"state": state}
+        if note is not None:
+            fields["note"] = note.strip()
+        _write_login(cursor, number, **fields)
+        _record(cursor, "Login", f"{number}: {state}" + (f" ({note.strip()})" if note and note.strip() else ""))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_login_note(number, note):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        _write_login(cursor, number, note=note.strip())
+        _record(cursor, "Login", f"{number}: note '{note.strip()}'")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def preview_logins_import(filepath):
+    """Co zrobi import pliku loginów: lista {number, name, action, detail}.
+    action: new (wolny numer -> osoba), same (już tak jest), skip (powód w detail)."""
+    pairs = read_logins_excel(filepath)
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        result, seen_numbers, seen_people = [], set(), set()
+        for name, number in pairs:
+            key = name_key(name)
+            if number in seen_numbers:
+                result.append({"number": number, "name": name, "action": "skip",
+                               "detail": "number twice in the file"})
+                continue
+            if key in seen_people:
+                result.append({"number": number, "name": name, "action": "skip",
+                               "detail": "person twice in the file"})
+                continue
+            seen_numbers.add(number)
+            seen_people.add(key)
+            problem = _import_problem(cursor, number, key)
+            action = "same" if problem == "same" else ("skip" if problem else "new")
+            result.append({"number": number, "name": name, "action": action,
+                           "detail": "" if action != "skip" else problem})
+        return result
+    finally:
+        conn.close()
+
+
+def apply_logins_import(rows, filepath=""):
+    """Zapisuje wiersze 'new' z podglądu (tylko na wolne numery). Zwraca liczbę przypisanych."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        count = 0
+        for row in rows:
+            if row["action"] != "new" or _import_problem(cursor, row["number"], name_key(row["name"])):
+                continue
+            _write_login(cursor, row["number"], name=row["name"], name_key=name_key(row["name"]))
+            count += 1
+        skipped = sum(1 for r in rows if r["action"] == "skip")
+        _record(cursor, "Import logins",
+                f"{count} new, {skipped} skipped" + (f" ({os.path.basename(filepath)})" if filepath else ""))
+        conn.commit()
+        return count
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def login_names():
     """login -> nazwisko z pliku loginów (do pokazania reachera, którego nie ma dziś na liście)."""
     conn = get_connection()
     try:
         result = {}
-        for name, login in conn.execute("SELECT name, login FROM logins ORDER BY name").fetchall():
-            result.setdefault(login, name)
+        for number, name in conn.execute(
+                "SELECT number, name FROM login_numbers WHERE name_key != ''").fetchall():
+            result[number] = name
         return result
     finally:
         conn.close()
