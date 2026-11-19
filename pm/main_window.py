@@ -57,6 +57,7 @@ from .dialogs import (
     HistoryDialog,
     MarkAsLateDialog,
     PlanHoursDialog,
+    plan_hours_fix,
 )
 from .consolidation_view import ConsolidationView
 from .hours_dialog import HoursDialog, remember_columns, remembered_columns
@@ -1266,15 +1267,12 @@ class MainWindow(QMainWindow):
         self.run_db_task(task, on_finished=done, refresh_after=True)
 
     def fix_plan_hours(self, rows):
-        """Osoby z 00:00-00:00 w planie: okienko z możliwością wpisania godzin."""
-        dlg = PlanHoursDialog(rows, self)
-        if dlg.exec() != QDialog.Accepted:
-            return
-        changes = dlg.changes()
+        """Osoby z 00:00-00:00 w planie (błąd planu): od razu zwykłe godziny zmiany, potem powiadomienie
+        z listą osób – użytkownik widzi, kto ma źle wypełniony plan, i zamyka OK."""
+        changes = plan_hours_fix(rows)
 
         def done(errors):
-            if errors:
-                QMessageBox.warning(self, "Plan without working hours", "Not changed:\n\n" + "\n".join(errors))
+            PlanHoursDialog(rows, changes, errors or (), self).exec()
 
         self.run_db_task(lambda: db.set_plan_hours_in_db(changes), on_finished=done, refresh_after=True)
 

@@ -38,15 +38,15 @@ def test_wrong_hours_are_refused(temp_db):
     assert _emp(a).work_hours == "00:00-00:00"
 
 
-def test_dialog_proposes_shift_hours_and_returns_ticked(temp_db, qtbot=None):
+def test_plan_hours_fixed_automatically_and_listed(temp_db, qtbot=None):
     from PySide6.QtWidgets import QApplication
-    from pm.dialogs import PlanHoursDialog
+    from pm.dialogs import PlanHoursDialog, plan_hours_fix
 
     QApplication.instance() or QApplication([])
     rows = [(1, "Nowak", "Ewa", "Laco", "Middag"), (2, "Dijk", "Piet", "Inbound 1", "Ochtend")]
-    dlg = PlanHoursDialog(rows)
-    assert [e.text() for e in dlg.edits] == ["15:00-00:00", "06:00-15:00"]
-    assert dlg.changes() == {1: "15:00-00:00", 2: "06:00-15:00"}     # wszyscy zaznaczeni od razu
-    dlg.edits[1].setText("07:00-15:00")
-    dlg.boxes[0].parentWidget().mousePressEvent(None)                  # klik obok kwadracika też działa
-    assert dlg.changes() == {2: "07:00-15:00"}
+    fixed = plan_hours_fix(rows)
+    assert fixed == {1: "15:00-00:00", 2: "06:00-15:00"}
+    dlg = PlanHoursDialog(rows, fixed)
+    table = dlg.findChild(__import__("PySide6.QtWidgets", fromlist=["QTableWidget"]).QTableWidget)
+    assert [table.item(r, 2).text() for r in range(2)] == ["15:00-00:00", "06:00-15:00"]
+    assert table.item(0, 0).text() == "Nowak Ewa"
